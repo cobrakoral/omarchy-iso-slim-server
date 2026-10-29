@@ -297,6 +297,11 @@ def main():
             vm.child.expect("(?i)passphrase", timeout=180)
             vm.child.sendline(PASSWORD)
         vm.wait_ssh()
+        vm.sudo(
+            "cryptsetup isLuks /dev/vda2"
+            if opts.encrypt
+            else "! cryptsetup isLuks /dev/vda2"
+        )
         identity = vm.sudo(
             "cat /etc/machine-id; sha256sum /etc/ssh/ssh_host_ed25519_key.pub"
         )

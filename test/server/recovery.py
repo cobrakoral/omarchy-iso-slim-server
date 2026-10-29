@@ -16,13 +16,21 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("directory", type=Path)
     parser.add_argument("--port", type=int, default=2422)
+    parser.add_argument("--encrypt", action="store_true")
     opts = parser.parse_args()
     directory = opts.directory.resolve()
     if not directory.is_relative_to(ROOT / "test-runs/server"):
         raise ValueError("Only disposable acceptance disks are supported")
+
+    def unlock(vm):
+        if opts.encrypt:
+            vm.child.expect("(?i)passphrase", timeout=180)
+            vm.child.sendline(PASSWORD)
+
     disk = directory / "system.qcow2"
     vm = VM(directory, disk, opts.port, [])
     try:
+        unlock(vm)
         vm.wait_ssh()
         config = vm.sudo("cat /boot/limine.conf")
         number = vm.sudo("cat /var/log/server-test-snapshot").strip()
@@ -68,6 +76,7 @@ def main():
         for key in keys:
             qmp(vm.qmp, "human-monitor-command", {"command-line": "sendkey " + key})
             time.sleep(0.2)
+        unlock(vm)
         vm.wait_ssh()
         proof = vm.sudo(
             'cat /proc/cmdline; findmnt -no FSTYPE /; test "$(cat /etc/rollback-proof)" = baseline; touch /etc/snapshot-session-write; test -w /etc/snapshot-session-write; grep -E "RESTORE|ROOT_SUB" /etc/limine-snapper-sync.conf || true'
@@ -137,6 +146,7 @@ def main():
         vm.stop()
     vm = VM(directory, disk, opts.port, [])
     try:
+        unlock(vm)
         vm.wait_ssh()
         proof = vm.sudo(
             'test "$(cat /etc/rollback-proof)" = baseline; test ! -e /etc/snapshot-session-write; findmnt -no FSTYPE / | grep -Fx btrfs; findmnt -no OPTIONS / | grep "subvol=/@"; cat /proc/cmdline; systemctl is-active systemd-networkd sshd'

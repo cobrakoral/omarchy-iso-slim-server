@@ -57,10 +57,14 @@ package() {{
     try:
         vm.wait_ssh()
         log = vm.sudo(r"""
+resolvectl query _gateway
 mkdir -p /run/server-iso /run/server-live /run/server-update-test
 mount -o ro /dev/sr0 /run/server-iso
 mount -o loop,ro /run/server-iso/arch/x86_64/airootfs.sfs /run/server-live
 mount -o ro /dev/sr1 /run/server-update-test
+sig=$(find /run/server-live/var/cache/omarchy/mirror/offline -name 'cloud-init-*.pkg.tar.*.sig' | head -n1)
+test -n "$sig"
+pacman-key --verify "$sig" "${sig%.sig}"
 cp /etc/pacman.conf /run/server-online-pacman.conf
 trap 'cp /run/server-online-pacman.conf /etc/pacman.conf; umount /run/server-update-test /run/server-live /run/server-iso' EXIT
 cat > /etc/pacman.conf <<'CONF'

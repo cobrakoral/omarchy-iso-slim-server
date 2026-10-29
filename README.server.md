@@ -40,7 +40,19 @@ archives contain only cloud-init's delta over the root image. Both are
 SHA-256 checked before the installer formats a disk. This retains upstream's
 ISO-integrity trust model (`SigLevel=Never` for its internal offline repo).
 Verify the unofficial ISO's checksum/signature before writing installation
-media. The installed online repositories require package signatures.
+media. The release directory includes `SHA256SUMS`, an ISO `.sha256`, a binary
+ISO `.sig`, `SHA256SUMS.asc`, and `UNOFFICIAL-SIGNING-KEY.asc`. The signing
+identity is the fork maintainer, not Omarchy. Its primary fingerprint is
+`7C5C6FEB40A5B493007FAA3650B1EB533F640140`.
+
+```sh
+cd release
+sha256sum --check SHA256SUMS
+gpg --import UNOFFICIAL-SIGNING-KEY.asc
+gpg --verify omarchy-slim-server-unofficial-YYYY.MM.DD-x86_64.iso.sig \
+  omarchy-slim-server-unofficial-YYYY.MM.DD-x86_64.iso
+```
+ The installed online repositories require package signatures.
 
 ## Install and access
 
@@ -175,6 +187,7 @@ python test/server/qemu.py release/omarchy-slim-server-unofficial-YYYY.MM.DD-x86
 python test/server/qemu.py release/omarchy-slim-server-unofficial-YYYY.MM.DD-x86_64.iso --bios
 python test/server/console.py release/omarchy-slim-server-unofficial-YYYY.MM.DD-x86_64.iso
 python test/server/recovery.py test-runs/server/<successful-base-run>
+python test/server/recovery.py test-runs/server/<successful-encrypted-run> --encrypt
 python test/server/update.py test-runs/server/<successful-base-run> release/omarchy-slim-server-unofficial-YYYY.MM.DD-x86_64.iso
 ```
 
@@ -212,6 +225,8 @@ A package lock documents versions; it cannot make a removed mirror archive
 reappear. A byte-identical ISO is not promised (Btrfs UUIDs and build-time
 metadata vary). Merge upstream changes explicitly and rerun acceptance,
 especially when Archinstall or the Limine package changes.
+
+See [the measured build and acceptance record](VALIDATION.server.md).
 
 ## Validation limits
 
