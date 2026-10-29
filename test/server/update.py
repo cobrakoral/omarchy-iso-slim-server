@@ -4,7 +4,6 @@
 import argparse
 from pathlib import Path
 import shutil
-import os
 from qemu import VM, ROOT, run, seed
 
 
@@ -12,6 +11,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("directory", type=Path)
     parser.add_argument("iso", type=Path)
+    parser.add_argument("--bios", action="store_true")
     opts = parser.parse_args()
     directory = opts.directory.resolve()
     if not directory.is_relative_to(ROOT / "test-runs/server"):
@@ -53,7 +53,7 @@ package() {{
         str(tree),
     )
     disk = directory / "system.qcow2"
-    vm = VM(directory, disk, 2422, [opts.iso.resolve(), media])
+    vm = VM(directory, disk, 2422, [opts.iso.resolve(), media], bios=opts.bios)
     try:
         vm.wait_ssh()
         log = vm.sudo(r"""
@@ -93,7 +93,7 @@ systemctl is-active snapper-cleanup.timer
         (directory / "update-pass.txt").write_text(log)
     finally:
         vm.stop()
-    vm = VM(directory, disk, 2422, [])
+    vm = VM(directory, disk, 2422, [], bios=opts.bios)
     try:
         vm.wait_ssh()
         vm.sudo(

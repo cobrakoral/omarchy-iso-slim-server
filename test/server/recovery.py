@@ -7,8 +7,9 @@ from pathlib import Path
 import re
 import shlex
 import pexpect
+import time
 from qemu import PASSWORD
-from qemu import VM, ROOT
+from qemu import VM, ROOT, qmp
 
 
 def main():
@@ -28,7 +29,6 @@ def main():
         vm.sudo(
             f'test "$(cat /etc/rollback-proof)" = changed; test "$(cat /.snapshots/{number}/snapshot/etc/rollback-proof)" = baseline'
         )
-        original_default = re.search(r"(?m)^default_entry:\s*(\d+)", config).group(1)
         entries = list(re.finditer(r"(?m)^[ \t]*/+[^/\n].*$", config))
         selected_number = None
         for index, entry in enumerate(entries):
@@ -46,9 +46,7 @@ def main():
             raise RuntimeError("Snapshot boot entry missing")
         # Change only the default selection, preserving the complete generated
         # hierarchy, original root entry, hashes, paths and machine-id metadata.
-        selected = re.sub(
-            r"(?m)^default_entry:.*$", f"default_entry: {selected_number}", config
-        )
+        selected = re.sub(r"(?m)^default_entry:.*$", "default_entry: 1", config)
         selected = re.sub(r"(?m)^timeout:.*$", "timeout: 0", selected)
         vm.sudo(
             "cp /boot/limine.conf /boot/limine.before-acceptance.conf; printf %s "
@@ -59,6 +57,17 @@ def main():
         vm.stop()
     vm = VM(directory, disk, opts.port, [])
     try:
+        # Exercise the real menu: root -> Snapshots -> the requested ID -> kernel.
+        snapshot_headers = re.findall(r"(?m)^[ \t]*/{3}\+?([0-9]+)\b", config)
+        ordinal = snapshot_headers.index(number)
+        vm.child.expect("BdsDxe: starting", timeout=60)
+        time.sleep(2)
+        keys = (
+            ["down", "down", "ret"] + ["down"] * (ordinal + 1) + ["ret", "down", "ret"]
+        )
+        for key in keys:
+            qmp(vm.qmp, "human-monitor-command", {"command-line": "sendkey " + key})
+            time.sleep(0.2)
         vm.wait_ssh()
         proof = vm.sudo(
             'cat /proc/cmdline; findmnt -no FSTYPE /; test "$(cat /etc/rollback-proof)" = baseline; touch /etc/snapshot-session-write; test -w /etc/snapshot-session-write; grep -E "RESTORE|ROOT_SUB" /etc/limine-snapper-sync.conf || true'

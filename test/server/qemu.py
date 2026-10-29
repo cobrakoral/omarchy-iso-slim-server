@@ -245,7 +245,12 @@ def main():
         )
         print(f"Installing {case}: {directory}", flush=True)
         vm = VM(
-            directory, disk, opts.port, [opts.iso.resolve(), cidata], installer=True
+            directory,
+            disk,
+            opts.port,
+            [opts.iso.resolve(), cidata],
+            installer=True,
+            bios=opts.bios,
         )
         try:
             initial = vm.child.expect(
@@ -292,6 +297,10 @@ def main():
             vm.child.expect("(?i)passphrase", timeout=180)
             vm.child.sendline(PASSWORD)
         vm.wait_ssh()
+        identity = vm.sudo(
+            "cat /etc/machine-id; sha256sum /etc/ssh/ssh_host_ed25519_key.pub"
+        )
+        (directory / "identity.txt").write_text(identity)
         print("BOOT_AND_SSH_PASS", flush=True)
         # Password authentication is checked at the console; SSH is key-only.
         vm.child.expect("slim-test login:", timeout=120)
@@ -303,7 +312,7 @@ def main():
 set -e
 systemctl is-active systemd-networkd systemd-resolved sshd
 systemctl is-enabled snapper-cleanup.timer limine-snapper-sync
-systemctl is-active snapper-cleanup.timer
+systemctl is-active snapper-cleanup.timer limine-snapper-sync
 test "$(systemctl get-default)" = multi-user.target
 ! systemctl is-enabled snapper-timeline.timer
 for package in networkmanager hyprland quickshell sddm pipewire docker podman cockpit; do ! pacman -Q "$package"; done
@@ -326,7 +335,7 @@ printf baseline > /etc/rollback-proof
 snapper --no-dbus -c root create -c number -d acceptance --print-number > /var/log/server-test-snapshot
 printf changed > /etc/rollback-proof
 limine-snapper-sync
-ls /boot/EFI/Linux
+find /boot -maxdepth 3 -type f
 cat /boot/limine.conf
 """)
         if opts.static:
