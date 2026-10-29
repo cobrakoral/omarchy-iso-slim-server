@@ -92,7 +92,8 @@ The shared installer preserves upstream's `@`, `@home`, `@log`, and `@pkg`
 subvolumes and a read-only `@factory`. The upstream retention template is
 copied verbatim: **five numbered pre-update root snapshots, no timeline**.
 `snapper-cleanup.timer` is enabled, and `limine-snapper-sync.service` plus
-Snapper's plugin keep snapshot boot entries synchronized. There is no
+Snapper's plugin keep snapshot boot entries synchronized. The small
+`inotify-tools` dependency keeps the standard watcher active. There is no
 invented hourly/daily retention policy.
 
 ```sh
@@ -164,7 +165,7 @@ are not enabled by default.
 Host dependencies:
 
 ```sh
-sudo pacman -S --needed qemu-system-x86 qemu-img edk2-ovmf libisoburn python-pexpect
+sudo pacman -S --needed qemu-system-x86 qemu-img edk2-ovmf libisoburn python-pexpect base-devel
 python test/server/unit.py
 python -m unittest test.unit.test_install_base_delta test.unit.test_root_image test.unit.test_place_root_image
 python test/server/qemu.py release/omarchy-slim-server-unofficial-YYYY.MM.DD-x86_64.iso
@@ -172,6 +173,7 @@ python test/server/qemu.py release/omarchy-slim-server-unofficial-YYYY.MM.DD-x86
 python test/server/qemu.py release/omarchy-slim-server-unofficial-YYYY.MM.DD-x86_64.iso --encrypt
 python test/server/qemu.py release/omarchy-slim-server-unofficial-YYYY.MM.DD-x86_64.iso --static
 python test/server/qemu.py release/omarchy-slim-server-unofficial-YYYY.MM.DD-x86_64.iso --bios
+python test/server/console.py release/omarchy-slim-server-unofficial-YYYY.MM.DD-x86_64.iso
 python test/server/recovery.py test-runs/server/<successful-base-run>
 python test/server/update.py test-runs/server/<successful-base-run> release/omarchy-slim-server-unofficial-YYYY.MM.DD-x86_64.iso
 ```
@@ -210,3 +212,11 @@ A package lock documents versions; it cannot make a removed mirror archive
 reappear. A byte-identical ISO is not promised (Btrfs UUIDs and build-time
 metadata vary). Merge upstream changes explicitly and rerun acceptance,
 especially when Archinstall or the Limine package changes.
+
+## Validation limits
+
+Acceptance uses disposable x86_64 QEMU/KVM guests. Physical hardware and
+Secure Boot are outside this validation. The system locale is selectable;
+the installer prompts remain English. The installed disk is a configured
+server, not a sealed VM cloning template. Preparing a template requires the
+usual cloud-init cleanup and machine-identity/SSH-key sealing before cloning.
