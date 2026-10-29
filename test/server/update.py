@@ -4,6 +4,7 @@
 import argparse
 from pathlib import Path
 import shutil
+import os
 from qemu import VM, ROOT, run, seed
 
 
@@ -72,6 +73,9 @@ Server=file:///run/server-update-test/
 [offline]
 Server=file:///run/server-live/var/cache/omarchy/mirror/offline/
 CONF
+# Only this test's generated cache entries: a repeated fixture build can
+# produce different bytes at the same deliberately simple version number.
+rm -f /var/cache/pacman/pkg/omarchy-server-update-fixture-*.pkg.tar.*
 pacman -U --noconfirm /run/server-update-test/version1.pkg.tar.zst
 test "$(cat /usr/share/omarchy-server-update-fixture/version)" = 1
 omarchy-update -y

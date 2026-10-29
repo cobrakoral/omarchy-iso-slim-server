@@ -17,7 +17,10 @@ sudo docker image inspect "$image" >/dev/null 2>&1 || sudo docker pull "$image"
 sudo docker image inspect "$image" --format '{{json .RepoDigests}}' > release/server-container.json
 git rev-parse HEAD > release/server-source-revision.txt
 git status --porcelain > release/server-source-status.txt
-git ls-files -z builder configs bin | xargs -0 sha256sum > release/server-source-files.sha256
+git ls-files -s builder configs bin > release/server-source-tree.git
+while IFS= read -r -d '' file; do
+  [[ -L $file ]] || sha256sum "$file"
+done < <(git ls-files -z builder configs bin) > release/server-source-files.sha256
 sudo docker run --rm --privileged \
   -e OMARCHY_SERVER_ARCHISO_COMMIT="$(git -C archiso rev-parse HEAD)" \
   -e OMARCHY_SERVER_SOURCE_COMMIT="$(git rev-parse HEAD)" \
