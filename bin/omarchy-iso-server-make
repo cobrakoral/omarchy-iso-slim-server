@@ -1,0 +1,21 @@
+#!/bin/bash
+# Server edition of the official container/archiso build pipeline.
+set -euo pipefail
+root=$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)
+cd "$root"
+[[ $# == 0 || $* == --no-boot-offer || $* == '--keep-pkg-cache --no-boot-offer' ]] || {
+  echo 'Use OMARCHY_EDITION=server bin/omarchy-iso-make [--no-boot-offer]' >&2; exit 2;
+}
+git submodule update --init --recursive --jobs=2
+mkdir -p release .server-work/cache
+image=${OMARCHY_BUILD_CONTAINER:-ghcr.io/archlinux/archlinux@sha256:7cb90fa1418aa3bc99c06ad5468988c56d164a3c0231ea6f2662f32aaad9e146}
+# Override the recorded digest only deliberately. The build writes its actual digest.
+sudo docker image inspect "$image" >/dev/null 2>&1 || sudo docker pull "$image"
+sudo docker image inspect "$image" --format '{{json .RepoDigests}}' > release/server-container.json
+sudo docker run --rm --privileged \
+  -e OMARCHY_EDITION=server -e OMARCHY_ARCH=x86_64 \
+  -e SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct)}" \
+  -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+  -v "$root/builder:/builder:ro" -v "$root/configs:/configs:ro" \
+  -v "$root/archiso:/archiso:ro" -v "$root/.server-work/cache:/server-cache" \
+  -v "$root/release:/out" "$image" bash /builder/server/build.sh

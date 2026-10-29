@@ -252,7 +252,9 @@ CMDLINE
 # ALL_kver as a literal path. It sets no ALL_microcode, which is deprecated;
 # the microcode hook in mkinitcpio.conf adds the microcode.
 image_kver=$(ls -1 "$root/usr/lib/modules/" | grep -E '^[0-9]+\.' | head -1)
-if [[ -z $image_kver ]]; then
+if [[ ${OMARCHY_EDITION:-desktop} == server ]]; then
+  echo "Server: build the machine-specific UKI at install time (no Plymouth)."
+elif [[ -z $image_kver ]]; then
   echo "WARNING: no kernel version found under /usr/lib/modules/; skipping the UKI pre-build"
 else
   # The kernel package this image carries: linux-omarchy since upstream made it
