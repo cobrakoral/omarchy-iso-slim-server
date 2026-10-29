@@ -50,6 +50,7 @@ printf 'quattro\n' > "$work/airootfs/root/omarchy_iso_ref"
 printf 'linux-omarchy\n' > "$work/airootfs/root/omarchy_kernel"
 printf 'OMARCHY_RUNTIME_PACKAGE=omarchy-server\nOMARCHY_SETTINGS_PACKAGE=omarchy-server\nOMARCHY_NVIM_PACKAGE=omarchy-server\n' > "$work/airootfs/usr/share/omarchy-iso/package-targets"
 sed -i -e 's/^iso_name=.*/iso_name="omarchy-slim-server-unofficial"/' \
+  -e 's/iso_label="OMARCHY_/iso_label="OMARCHY_SRV_/' \
   -e 's/^iso_publisher=.*/iso_publisher="Unofficial community edition"/' \
   -e 's/^iso_application=.*/iso_application="Omarchy Slim Server Installer (unofficial)"/' \
   -e "/'-comp'/i\  '-processors' '2'" "$work/profiledef.sh"
@@ -59,6 +60,10 @@ for f in "$work"/grub/{grub,loopback}.cfg; do
   sed -i -e 's/%KERNEL%/linux-omarchy/g' -e 's/%BOOT_SPLASH_KERNEL_OPTIONS%//g' \
     -e 's/%KERNEL_OPTIONS%/console=tty0 console=ttyS0,115200 initramfs_async=0/g' "$f"
 done
+for f in "$work"/syslinux/*linux.cfg; do
+  sed -i -e 's/quiet splash //g' -e '/^APPEND /s/$/ console=tty0 console=ttyS0,115200/' "$f"
+done
+printf 'source_commit=%s\narchiso_revision=%s\n' "${OMARCHY_SERVER_SOURCE_COMMIT:-unknown}" "${OMARCHY_SERVER_ARCHISO_COMMIT:-unknown}" > "$work/airootfs/usr/share/omarchy-iso/server-build-info"
 # Drop the Mac-specific entry whose second kernel is deliberately not shipped.
 python - "$work/grub/grub.cfg" "$work/grub/loopback.cfg" <<'PY'
 import sys

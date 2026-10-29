@@ -3,16 +3,24 @@
 set -euo pipefail
 root=$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)
 cd "$root"
-[[ $# == 0 || $* == --no-boot-offer || $* == '--keep-pkg-cache --no-boot-offer' ]] || {
-  echo 'Use OMARCHY_EDITION=server bin/omarchy-iso-make [--no-boot-offer]' >&2; exit 2;
-}
+for option in "$@"; do
+  case $option in
+    --no-boot-offer|--keep-pkg-cache) ;; # Server builds never purge the host cache.
+    *) echo "Unsupported server build option: $option" >&2; exit 2 ;;
+  esac
+done
 git submodule update --init --recursive --jobs=2
 mkdir -p release .server-work/cache
 image=${OMARCHY_BUILD_CONTAINER:-ghcr.io/archlinux/archlinux@sha256:7cb90fa1418aa3bc99c06ad5468988c56d164a3c0231ea6f2662f32aaad9e146}
 # Override the recorded digest only deliberately. The build writes its actual digest.
 sudo docker image inspect "$image" >/dev/null 2>&1 || sudo docker pull "$image"
 sudo docker image inspect "$image" --format '{{json .RepoDigests}}' > release/server-container.json
+git rev-parse HEAD > release/server-source-revision.txt
+git status --porcelain > release/server-source-status.txt
+git ls-files -z builder configs bin | xargs -0 sha256sum > release/server-source-files.sha256
 sudo docker run --rm --privileged \
+  -e OMARCHY_SERVER_ARCHISO_COMMIT="$(git -C archiso rev-parse HEAD)" \
+  -e OMARCHY_SERVER_SOURCE_COMMIT="$(git rev-parse HEAD)" \
   -e OMARCHY_EDITION=server -e OMARCHY_ARCH=x86_64 \
   -e SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct)}" \
   -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
