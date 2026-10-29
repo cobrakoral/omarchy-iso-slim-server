@@ -7,3 +7,6 @@ __pycache__/
 
 # Acceptance test harness artifacts
 test-runs/**
+
+# Isolated server build/cache/analysis workspace
+.server-work/
