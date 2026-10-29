@@ -1,0 +1,20 @@
+# Preserve the verified Omarchy package's core verbatim, without libnotify.
+pkgname=limine-snapper-sync-server
+pkgver=1.32.1
+pkgrel=1
+pkgdesc='Headless variant of Omarchy limine-snapper-sync 1.32.1-2'
+arch=('x86_64')
+url='https://gitlab.com/Zesko/limine-snapper-sync'
+license=('GPL3')
+depends=('bash' 'limine' 'snapper' 'btrfs-progs')
+provides=('limine-snapper-sync=1.32.1')
+conflicts=('limine-snapper-sync' 'limine-snapper-cli' 'limine-snapper-sync-git')
+backup=('etc/limine-snapper-sync.conf')
+# Downloaded and signature-checked by pacman before makepkg verifies this pin.
+source=('limine-snapper-sync-1.32.1-2-x86_64.pkg.tar.zst')
+sha256sums=('95e239bd4c3297cc66c67f64ff66ef5df72ab5105995a2b11caf0f4a896e8465')
+noextract=("${source[0]}")
+package() {
+  bsdtar -xf "$srcdir/${source[0]}" -C "$pkgdir" etc/boot etc/limine-snapper-sync.conf usr/bin usr/lib usr/share/libalpm usr/share/locale usr/share/doc
+  rm -f "$pkgdir/usr/bin/limine-snapper-notify"
+}

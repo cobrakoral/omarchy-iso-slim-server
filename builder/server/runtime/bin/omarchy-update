@@ -1,0 +1,17 @@
+#!/bin/bash
+# Minimal applicable pipeline: lock, pre-update snapshot, full upgrade, boot check.
+set -euo pipefail
+if (( EUID != 0 )); then exec sudo -- "$0" "$@"; fi
+[[ $# == 0 || $* == -y ]] || { echo 'Usage: omarchy-update [-y]' >&2; exit 2; }
+exec 9>/run/omarchy-server-update.lock
+flock -n 9 || { echo 'Another server update is running.' >&2; exit 1; }
+omarchy-snapshot create
+args=(); [[ ${1:-} != -y ]] || args+=(--noconfirm)
+# One full transaction updates the keyring packages as well. No desktop migrations.
+pacman -Syu "${args[@]}"
+limine-update
+for uki in /boot/EFI/Linux/omarchy_linux-omarchy.efi; do
+  [[ -s $uki ]] || { echo "Boot verification failed: $uki" >&2; exit 1; }
+done
+limine-snapper-sync
+printf 'Update complete; reboot when convenient.\n'

@@ -1,0 +1,22 @@
+pkgname=omarchy-server
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Unofficial minimal Omarchy server maintenance and snapshot integration'
+arch=('any')
+url='https://github.com/cobrakoral/omarchy-iso-slim-server'
+license=('MIT')
+depends=('bash' 'coreutils' 'util-linux' 'sudo' 'pacman' 'snapper' 'limine-snapper-sync' 'limine-mkinitcpio-hook')
+backup=('etc/limine-entry-tool.d/omarchy-server.conf' 'etc/mkinitcpio.conf.d/omarchy-server.conf')
+package() {
+  cd "$startdir"
+  install -d "$pkgdir/usr/share/omarchy/default" "$pkgdir/usr/share/omarchy/install/config" "$pkgdir/usr/bin"
+  cp -r upstream/default/{limine,snapper} "$pkgdir/usr/share/omarchy/default/"
+  install -m644 upstream/install/config/snapper.sh "$pkgdir/usr/share/omarchy/install/config/"
+  install -m755 upstream/bin/* bin/* "$pkgdir/usr/bin/"
+  install -Dm644 upstream/LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 limine.conf "$pkgdir/etc/limine-entry-tool.d/omarchy-server.conf"
+  install -Dm644 mkinitcpio.conf "$pkgdir/etc/mkinitcpio.conf.d/omarchy-server.conf"
+  install -Dm644 upstream/etc/limine-entry-tool.d/omarchy-uki.conf "$pkgdir/etc/limine-entry-tool.d/omarchy-uki.conf"
+  printf 'server\n' | install -Dm644 /dev/stdin "$pkgdir/etc/omarchy-edition"
+  printf '84782475aeb885c8d05f9e85b6ad0f1a0add60e5\n' | install -Dm644 /dev/stdin "$pkgdir/usr/share/omarchy/server-upstream-revision"
+}

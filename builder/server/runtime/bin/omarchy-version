@@ -1,0 +1,2 @@
+#!/bin/bash
+pacman -Q omarchy-server | cut -d ' ' -f2
