@@ -45,7 +45,12 @@ def main():
         answer("Installation disk", "\x1b[B")
         vm.child.expect("Erase /dev/vda", timeout=60)
         vm.child.send("y")
-        vm.child.expect(r"Installation complete\.", timeout=1800)
+        result = vm.child.expect(
+            [r"Installation complete\.", "ValueError:", "Installation halted."],
+            timeout=1800,
+        )
+        if result:
+            raise RuntimeError("Interactive installation failed; inspect serial log")
         print("INTERACTIVE_GUM_INSTALL_PASS", flush=True)
     finally:
         vm.stop()

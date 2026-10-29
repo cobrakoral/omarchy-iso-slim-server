@@ -5,7 +5,7 @@ umask 077
 trap 'unset password passphrase; rm -f /run/server-answers.json' EXIT
 export GUM_INPUT_SHOW_HELP=false GUM_CHOOSE_SHOW_HELP=false
 printf 'Omarchy Slim Server — unofficial edition\nAll packages install offline. The selected disk will be erased.\n'
-locale=$(sed -n 's/^#\?\([A-Za-z_]*\.UTF-8\) UTF-8$/\1/p' /etc/locale.gen | gum filter --header 'System language / locale (default en_US.UTF-8)' --value en_US.UTF-8)
+locale=$(python /usr/share/omarchy-iso/server_config.py --list-locales | gum filter --header 'System language / locale (default en_US.UTF-8)' --value en_US.UTF-8)
 keyboard=$(localectl list-keymaps | gum filter --header 'Console keyboard layout' --value us)
 loadkeys "$keyboard"
 hostname=$(gum input --header Hostname --value omarchy-server)

@@ -27,6 +27,19 @@ def candidate_disks(devices):
     ]
 
 
+def supported_locales(text):
+    locales = []
+    for line in text.splitlines():
+        fields = line.lstrip("# ").split()
+        if (
+            len(fields) == 2
+            and fields[1] == "UTF-8"
+            and re.fullmatch(r"[A-Za-z_]+\.UTF-8(?:@[a-z]+)?", fields[0])
+        ):
+            locales.append(fields[0])
+    return locales
+
+
 def network_config(answers):
     mode = answers.get("network", "dhcp")
     if mode not in ("dhcp", "static"):
@@ -237,6 +250,12 @@ def make_config(answers, size):
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--list-locales"]:
+        locales = supported_locales(Path("/etc/locale.gen").read_text())
+        if not locales:
+            sys.exit("No supported UTF-8 locales found in /etc/locale.gen.")
+        print("\n".join(locales))
+        sys.exit(0)
     if sys.argv[1:] == ["--list-disks"]:
         devices = json.loads(
             subprocess.check_output(

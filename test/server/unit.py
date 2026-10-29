@@ -116,6 +116,10 @@ class ServerTests(unittest.TestCase):
             [d["path"] for d in config.candidate_disks(devices)], ["/dev/target"]
         )
 
+    def test_locale_picker_accepts_arch_whitespace(self):
+        text = "# Configuration\n#en_US.UTF-8 UTF-8  \npt_BR.UTF-8 UTF-8\t\n#en_US ISO-8859-1  \n"
+        self.assertEqual(config.supported_locales(text), ["en_US.UTF-8", "pt_BR.UTF-8"])
+
     def test_dhcp_and_ipv6_without_interface_name(self):
         text = config.network_config({})
         self.assertIn("DHCP=yes", text)
