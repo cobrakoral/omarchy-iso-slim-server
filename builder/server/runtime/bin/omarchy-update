@@ -10,8 +10,16 @@ args=(); [[ ${1:-} != -y ]] || args+=(--noconfirm)
 # One full transaction updates the keyring packages as well. No desktop migrations.
 pacman -Syu "${args[@]}"
 limine-update
-for uki in /boot/EFI/Linux/omarchy_linux-omarchy.efi; do
-  [[ -s $uki ]] || { echo "Boot verification failed: $uki" >&2; exit 1; }
-done
+if [[ -d /sys/firmware/efi ]]; then
+  [[ -s /boot/EFI/Linux/omarchy_linux-omarchy.efi ]] || {
+    echo 'Boot verification failed: server UKI is missing' >&2; exit 1;
+  }
+else
+  # BIOS uses the same kernel/initramfs entries as upstream, without a UKI.
+  kernel_dir="/boot/$(cat /etc/machine-id)/linux-omarchy"
+  [[ -s $kernel_dir/vmlinuz && -s $kernel_dir/initramfs ]] || {
+    echo "Boot verification failed: $kernel_dir" >&2; exit 1;
+  }
+fi
 limine-snapper-sync
 printf 'Update complete; reboot when convenient.\n'
