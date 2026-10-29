@@ -2,6 +2,9 @@
 import importlib.util
 from pathlib import Path
 import unittest
+import sys
+import types
+import tempfile
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -19,6 +22,79 @@ packages = load("packages", "builder/server/check-packages.py")
 
 
 class ServerTests(unittest.TestCase):
+    def test_cloud_config_survives_chroot_api_mounts(self):
+        # arch-chroot binds /run from the live system. The temporary pacman
+        # config must live on the target's persistent tree during its call.
+        with tempfile.TemporaryDirectory() as name:
+            target = Path(name)
+            context = types.SimpleNamespace(
+                target=target,
+                omarchy_install={"server": {"cloud_init": True}},
+                authorized_keys_path=None,
+            )
+            package = types.ModuleType("orchestrator")
+            package.__path__ = []
+            shared = types.SimpleNamespace(OFFLINE_MIRROR=Path("/offline"))
+            with patch.dict(
+                sys.modules,
+                {"orchestrator": package, "orchestrator.phases_impl": shared},
+            ):
+                spec = importlib.util.spec_from_file_location(
+                    "orchestrator.server_test",
+                    ROOT
+                    / "configs/airootfs/usr/share/omarchy-iso/orchestrator/server.py",
+                )
+                server = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(server)
+
+            def chroot(ctx, *args):
+                if args[0] == "pacman":
+                    config_path = args[args.index("--config") + 1]
+                    self.assertFalse(config_path.startswith("/run/"))
+                    self.assertTrue((target / config_path.lstrip("/")).is_file())
+
+            with patch.object(
+                server, "chroot", side_effect=chroot
+            ) as calls, patch.object(server.subprocess, "run"), patch.object(
+                server.Path, "read_text", return_value="[offline]\n"
+            ):
+                server.cloud_init(context)
+            self.assertTrue(
+                any(call.args[1] == "pacman" for call in calls.call_args_list)
+            )
+            enabled = [
+                call.args for call in calls.call_args_list if "enable" in call.args
+            ]
+            self.assertTrue(any("cloud-init-main.service" in call for call in enabled))
+            self.assertFalse(
+                (target / "etc/pacman.d/omarchy-server-offline.conf").exists()
+            )
+
+    def test_cloud_opt_out_does_not_run_pacman(self):
+        package = types.ModuleType("orchestrator")
+        package.__path__ = []
+        with patch.dict(
+            sys.modules,
+            {
+                "orchestrator": package,
+                "orchestrator.phases_impl": types.SimpleNamespace(),
+            },
+        ):
+            spec = importlib.util.spec_from_file_location(
+                "orchestrator.server_test",
+                ROOT / "configs/airootfs/usr/share/omarchy-iso/orchestrator/server.py",
+            )
+            server = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(server)
+        with patch.object(server, "chroot") as chroot, patch.object(
+            server.subprocess, "run"
+        ) as run:
+            server.cloud_init(
+                types.SimpleNamespace(omarchy_install={"server": {"cloud_init": False}})
+            )
+        chroot.assert_not_called()
+        run.assert_not_called()
+
     def test_dhcp_and_ipv6_without_interface_name(self):
         text = config.network_config({})
         self.assertIn("DHCP=yes", text)

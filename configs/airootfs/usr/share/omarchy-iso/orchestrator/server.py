@@ -161,13 +161,15 @@ def cloud_init(ctx):
     )
     try:
         write(
-            ctx, "run/omarchy-server-offline.conf", Path("/etc/pacman.conf").read_text()
+            ctx,
+            "etc/pacman.d/omarchy-server-offline.conf",
+            Path("/etc/pacman.conf").read_text(),
         )
         chroot(
             ctx,
             "pacman",
             "--config",
-            "/run/omarchy-server-offline.conf",
+            "/etc/pacman.d/omarchy-server-offline.conf",
             "-Sy",
             "--needed",
             "--noconfirm",
@@ -175,7 +177,9 @@ def cloud_init(ctx):
         )
     finally:
         subprocess.run(["umount", str(cache)], check=True)
-        (ctx.target / "run/omarchy-server-offline.conf").unlink(missing_ok=True)
+        (ctx.target / "etc/pacman.d/omarchy-server-offline.conf").unlink(
+            missing_ok=True
+        )
     # NoCloud uses a DIFFERENT volume label. Installer cidata is never reused.
     write(
         ctx,
@@ -191,6 +195,7 @@ def cloud_init(ctx):
         ctx,
         "systemctl",
         "enable",
+        "cloud-init-main.service",
         "cloud-init-local.service",
         "cloud-init-network.service",
         "cloud-config.service",
