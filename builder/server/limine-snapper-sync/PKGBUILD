@@ -1,13 +1,13 @@
 # Preserve the verified Omarchy package's core verbatim, without libnotify.
 pkgname=limine-snapper-sync-server
 pkgver=1.32.1
-pkgrel=1
+pkgrel=2
 pkgdesc='Headless variant of Omarchy limine-snapper-sync 1.32.1-2'
 arch=('x86_64')
 options=('!debug' '!strip')
 url='https://gitlab.com/Zesko/limine-snapper-sync'
 license=('GPL3')
-depends=('bash' 'limine' 'snapper' 'btrfs-progs')
+depends=('bash' 'limine' 'snapper' 'btrfs-progs' 'inotify-tools')
 provides=('limine-snapper-sync=1.32.1')
 conflicts=('limine-snapper-sync' 'limine-snapper-cli' 'limine-snapper-sync-git')
 backup=('etc/limine-snapper-sync.conf')

@@ -15,6 +15,7 @@ sudo
 openssh
 btrfs-progs
 snapper
+inotify-tools
 limine
 limine-mkinitcpio-hook
 limine-snapper-sync-server
