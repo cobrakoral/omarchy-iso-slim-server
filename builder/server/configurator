@@ -38,7 +38,7 @@ if gum confirm --default=false 'Encrypt the disk with LUKS? (default No)'; then
 fi
 cloud_init=false
 if gum confirm --default=false 'Install cloud-init? (default No)'; then cloud_init=true; fi
-disk=$(lsblk -dnpo PATH,TYPE,SIZE,MODEL | awk '$2=="disk"' | gum choose --header 'Installation disk — ERASES THE WHOLE DISK' | awk '{print $1}')
+disk=$(python /usr/share/omarchy-iso/server_config.py --list-disks | gum choose --header 'Installation disk — ERASES THE WHOLE DISK' | awk '{print $1}')
 gum confirm --default=false "Erase $disk and install $hostname?" || exit 1
 jq -n --arg disk "$disk" --arg hostname "$hostname" --arg username "$username" --arg password_hash "$password_hash" --arg timezone "$timezone" --arg keyboard "$keyboard" --arg locale "$locale" --arg network "$network" --arg address "$address" --arg gateway "$gateway" --arg dns "$dns" --arg mac "$mac" --arg encryption_password "$passphrase" --argjson encrypt "$encrypt" --argjson cloud_init "$cloud_init" '$ARGS.named' >/run/server-answers.json
 python /usr/share/omarchy-iso/server_config.py /run/server-answers.json

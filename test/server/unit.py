@@ -95,6 +95,27 @@ class ServerTests(unittest.TestCase):
         chroot.assert_not_called()
         run.assert_not_called()
 
+    def test_disk_picker_excludes_floppy_read_only_and_mounted_disks(self):
+        def disk(name, size=16 * 1024**3, ro=False, children=None):
+            return dict(
+                path=name,
+                type="disk",
+                size=size,
+                ro=ro,
+                mountpoints=[None],
+                children=children or [],
+            )
+
+        devices = [
+            disk("/dev/fd0", size=0),
+            disk("/dev/readonly", ro=True),
+            disk("/dev/live", children=[dict(mountpoints=["/run/archiso/bootmnt"])]),
+            disk("/dev/target"),
+        ]
+        self.assertEqual(
+            [d["path"] for d in config.candidate_disks(devices)], ["/dev/target"]
+        )
+
     def test_dhcp_and_ipv6_without_interface_name(self):
         text = config.network_config({})
         self.assertIn("DHCP=yes", text)

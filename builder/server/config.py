@@ -7,6 +7,25 @@ import subprocess
 import sys
 from pathlib import Path
 
+MIN_DISK_BYTES = 12 * 1024**3
+
+
+def disk_busy(device):
+    return any(device.get("mountpoints") or []) or any(
+        disk_busy(c) for c in device.get("children", [])
+    )
+
+
+def candidate_disks(devices):
+    return [
+        d
+        for d in devices
+        if d["type"] == "disk"
+        and not d["ro"]
+        and int(d["size"]) >= MIN_DISK_BYTES
+        and not disk_busy(d)
+    ]
+
 
 def network_config(answers):
     mode = answers.get("network", "dhcp")
@@ -218,6 +237,20 @@ def make_config(answers, size):
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--list-disks"]:
+        devices = json.loads(
+            subprocess.check_output(
+                ["lsblk", "-Jbo", "PATH,TYPE,SIZE,MOUNTPOINTS,RO,MODEL"], text=True
+            )
+        )["blockdevices"]
+        candidates = candidate_disks(devices)
+        if not candidates:
+            sys.exit("No unmounted writable disks of at least 12 GiB found.")
+        for device in candidates:
+            print(
+                f"{device['path']} {int(device['size']) / 1024**3:.1f} GiB {device.get('model') or ''}"
+            )
+        sys.exit(0)
     answers = json.loads(Path(sys.argv[1]).read_text())
     disk = answers["disk"]
     # Whole disks only, and never the mounted live medium or a mounted host disk.
