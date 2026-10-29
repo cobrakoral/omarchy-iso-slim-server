@@ -63,10 +63,10 @@ class PacmanConfig:
 
 
 class InstallBaseDeltaTest(unittest.TestCase):
-    def run_delta(self, installer):
+    def run_delta(self, installer, server=False):
         arch = self.enterContext(adapter({"archinstall.lib.pacman.config": {"PacmanConfig": PacmanConfig}}, version="4.5"))
         # install_base_delta times its steps with phases_impl's timer.
-        timer = types.SimpleNamespace(_time_step=lambda name: nullcontext())
+        timer = types.SimpleNamespace(_time_step=lambda name: nullcontext(), _server_edition=lambda: server)
         self.enterContext(mock.patch.dict(sys.modules, {"orchestrator.phases_impl": timer}))
         config = types.SimpleNamespace(mirror_config=None, pacman_config=None)
         arch.install_base_delta(installer, config, hostname=None, locale_config=None)
@@ -74,6 +74,18 @@ class InstallBaseDeltaTest(unittest.TestCase):
 
     def target(self):
         return Path(self.enterContext(TemporaryDirectory()))
+
+    def test_server_uses_selected_firmware_families(self):
+        installer = Installer45(self.target(), [])
+        installer._base_packages = ["linux-firmware", "needed-package"]
+        calls = self.run_delta(installer, server=True)
+        self.assertIn(("strap", ["needed-package"]), calls)
+
+    def test_desktop_keeps_firmware_metapackage(self):
+        installer = Installer45(self.target(), [])
+        installer._base_packages = ["linux-firmware"]
+        calls = self.run_delta(installer)
+        self.assertIn(("strap", ["linux-firmware"]), calls)
 
     def test_archinstall_44_gets_the_mountpoint(self):
         calls = self.run_delta(Installer44(self.target()))

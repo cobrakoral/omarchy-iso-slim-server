@@ -171,7 +171,7 @@ def _filesystem_step_tweaks(throwaway_root_fs: bool) -> Iterator[None]:
         import parted
         from archinstall.lib.disk.luks import Luks2
         from archinstall.lib.models.device import FilesystemType
-        from .phases_impl import _time_step, _server_edition
+        from .phases_impl import _time_step
         device_handler = dh_module.device_handler
     except Exception as exc:  # pragma: no cover - depends on the archinstall release
         info(f"› filesystem step runs untimed ({exc})")
@@ -474,7 +474,7 @@ def install_base_delta(
 
     # Each framework call below has its own [step] timer: the function takes
     # 0.8 s with no package to install, and the timers show where.
-    from .phases_impl import _time_step
+    from .phases_impl import _time_step, _server_edition
 
     with _time_step("DELTA.prepare_fs_and_encrypt"):
         for mod in disk_config.device_modifications:
