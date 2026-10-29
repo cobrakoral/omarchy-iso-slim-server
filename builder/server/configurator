@@ -16,8 +16,9 @@ password=$(gum input --password --header 'Administrator password (console and su
 password_hash=$(printf '%s' "$password" | openssl passwd -6 -stdin); unset password
 timezone=$(timedatectl list-timezones | gum filter --header Timezone --value UTC)
 network=$(gum choose --header Networking dhcp static)
-address=''; gateway=''; dns=''
+address=''; gateway=''; dns=''; mac=''
 if [[ $network == static ]]; then
+  mac=$(ip -j link | jq -r '.[] | select(.link_type == "ether") | "\(.address) \(.ifname)"' | gum choose --header 'Interface for static networking (identified by MAC)' | awk '{print $1}')
   address=$(gum input --header 'IPv4 address with prefix (192.0.2.10/24)')
   gateway=$(gum input --header 'IPv4 gateway')
   dns=$(gum input --header 'DNS addresses, separated by spaces')
@@ -39,5 +40,5 @@ cloud_init=false
 if gum confirm --default=false 'Install cloud-init? (default No)'; then cloud_init=true; fi
 disk=$(lsblk -dnpo PATH,TYPE,SIZE,MODEL | awk '$2=="disk"' | gum choose --header 'Installation disk — ERASES THE WHOLE DISK' | awk '{print $1}')
 gum confirm --default=false "Erase $disk and install $hostname?" || exit 1
-jq -n --arg disk "$disk" --arg hostname "$hostname" --arg username "$username" --arg password_hash "$password_hash" --arg timezone "$timezone" --arg keyboard "$keyboard" --arg locale "$locale" --arg network "$network" --arg address "$address" --arg gateway "$gateway" --arg dns "$dns" --arg encryption_password "$passphrase" --argjson encrypt "$encrypt" --argjson cloud_init "$cloud_init" '$ARGS.named' >/run/server-answers.json
+jq -n --arg disk "$disk" --arg hostname "$hostname" --arg username "$username" --arg password_hash "$password_hash" --arg timezone "$timezone" --arg keyboard "$keyboard" --arg locale "$locale" --arg network "$network" --arg address "$address" --arg gateway "$gateway" --arg dns "$dns" --arg mac "$mac" --arg encryption_password "$passphrase" --argjson encrypt "$encrypt" --argjson cloud_init "$cloud_init" '$ARGS.named' >/run/server-answers.json
 python /usr/share/omarchy-iso/server_config.py /run/server-answers.json
