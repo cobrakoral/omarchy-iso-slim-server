@@ -217,7 +217,14 @@ def _root_image() -> Path:
 ROOT_IMAGE_REQUIRED_PACKAGES = ("limine", "omarchy-keyring")
 
 
+def _server_edition() -> bool:
+    marker = Path("/etc/omarchy-edition")
+    return marker.is_file() and marker.read_text().strip() == "server"
+
+
 def _root_image_required_packages() -> list[str]:
+    if _server_edition():
+        return [*ROOT_IMAGE_REQUIRED_PACKAGES, "omarchy-server", "snapper", "openssh"]
     return [
         *ROOT_IMAGE_REQUIRED_PACKAGES,
         _omarchy_runtime_package(),
@@ -669,7 +676,7 @@ def arch_install_system(ctx: InstallContext) -> None:
                 f"{kernel}-headers" for kernel in config.kernels
                 if not arch.target_has_package(installer.target, f"{kernel}-headers")
             ]
-            if missing_headers:
+            if missing_headers and not _server_edition():
                 with _time_step(f"STEP.kernel_headers ({' '.join(missing_headers)})"):
                     installer.add_additional_packages(missing_headers)
 
@@ -3247,7 +3254,8 @@ def _tailscale_authkey(path: Path) -> str:
 
 def validate_boot(ctx: InstallContext) -> None:
     _assert_boot_hooks_restored(ctx)
-    _validate_kernel_headers(ctx)
+    if not _server_edition():
+        _validate_kernel_headers(ctx)
 
     boot = _boot_intent(ctx)
     storage = _storage_intent(ctx)

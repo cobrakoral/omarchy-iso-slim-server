@@ -171,7 +171,7 @@ def _filesystem_step_tweaks(throwaway_root_fs: bool) -> Iterator[None]:
         import parted
         from archinstall.lib.disk.luks import Luks2
         from archinstall.lib.models.device import FilesystemType
-        from .phases_impl import _time_step
+        from .phases_impl import _time_step, _server_edition
         device_handler = dh_module.device_handler
     except Exception as exc:  # pragma: no cover - depends on the archinstall release
         info(f"› filesystem step runs untimed ({exc})")
@@ -505,7 +505,11 @@ def install_base_delta(
             installer.set_vconsole(locale_config)
 
     with _time_step("DELTA.package_delta"):
-        delta = [pkg for pkg in installer._base_packages if not target_has_package(installer.target, pkg)]
+        # Server firmware families are selected by the edition manifest. The
+        # desktop metapackage also brings GPU firmware that no server step needs.
+        delta = [pkg for pkg in installer._base_packages
+                 if not target_has_package(installer.target, pkg)
+                 and not (_server_edition() and pkg == "linux-firmware")]
         if delta:
             installer.pacman.strap(delta)
         installer._helper_flags["base-strapped"] = True

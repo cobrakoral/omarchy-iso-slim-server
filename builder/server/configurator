@@ -1,0 +1,43 @@
+#!/bin/bash
+# Bash/Gum text front end to the shared Archinstall orchestrator.
+set -euo pipefail
+umask 077
+trap 'unset password passphrase; rm -f /run/server-answers.json' EXIT
+export GUM_INPUT_SHOW_HELP=false GUM_CHOOSE_SHOW_HELP=false
+printf 'Omarchy Slim Server — unofficial edition\nAll packages install offline. The selected disk will be erased.\n'
+locale=$(sed -n 's/^#\?\([A-Za-z_]*\.UTF-8\) UTF-8$/\1/p' /etc/locale.gen | gum filter --header 'System language / locale (default en_US.UTF-8)' --value en_US.UTF-8)
+keyboard=$(localectl list-keymaps | gum filter --header 'Console keyboard layout' --value us)
+loadkeys "$keyboard"
+hostname=$(gum input --header Hostname --value omarchy-server)
+username=$(gum input --header 'Administrator username' --value admin)
+password=$(gum input --password --header 'Administrator password (console and sudo)')
+[[ ${#password} -ge 12 ]] || { echo 'Use at least 12 characters.' >&2; exit 1; }
+[[ $password == "$(gum input --password --header 'Confirm password')" ]] || { echo 'Passwords differ.' >&2; exit 1; }
+password_hash=$(printf '%s' "$password" | openssl passwd -6 -stdin); unset password
+timezone=$(timedatectl list-timezones | gum filter --header Timezone --value UTC)
+network=$(gum choose --header Networking dhcp static)
+address=''; gateway=''; dns=''
+if [[ $network == static ]]; then
+  address=$(gum input --header 'IPv4 address with prefix (192.0.2.10/24)')
+  gateway=$(gum input --header 'IPv4 gateway')
+  dns=$(gum input --header 'DNS addresses, separated by spaces')
+fi
+keys=$(gum input --header 'Optional path to SSH public-key file (on mounted local media)')
+if [[ -n $keys ]]; then
+  ssh-keygen -l -f "$keys" >/dev/null
+  cp -- "$keys" /root/authorized_keys
+else
+  rm -f /root/authorized_keys
+fi
+encrypt=false; passphrase=''
+if gum confirm --default=false 'Encrypt the disk with LUKS? (default No)'; then
+  encrypt=true
+  passphrase=$(gum input --password --header 'LUKS passphrase')
+  [[ ${#passphrase} -ge 12 && $passphrase == "$(gum input --password --header 'Confirm LUKS passphrase')" ]] || { echo 'Passphrases differ or are too short.' >&2; exit 1; }
+fi
+cloud_init=false
+if gum confirm --default=false 'Install cloud-init? (default No)'; then cloud_init=true; fi
+disk=$(lsblk -dnpo PATH,TYPE,SIZE,MODEL | awk '$2=="disk"' | gum choose --header 'Installation disk — ERASES THE WHOLE DISK' | awk '{print $1}')
+gum confirm --default=false "Erase $disk and install $hostname?" || exit 1
+jq -n --arg disk "$disk" --arg hostname "$hostname" --arg username "$username" --arg password_hash "$password_hash" --arg timezone "$timezone" --arg keyboard "$keyboard" --arg locale "$locale" --arg network "$network" --arg address "$address" --arg gateway "$gateway" --arg dns "$dns" --arg encryption_password "$passphrase" --argjson encrypt "$encrypt" --argjson cloud_init "$cloud_init" '$ARGS.named' >/run/server-answers.json
+python /usr/share/omarchy-iso/server_config.py /run/server-answers.json
