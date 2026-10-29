@@ -3,6 +3,7 @@ pkgver=0.1.0
 pkgrel=1
 pkgdesc='Unofficial minimal Omarchy server maintenance and snapshot integration'
 arch=('any')
+options=('!debug' '!strip')
 url='https://github.com/cobrakoral/omarchy-iso-slim-server'
 license=('MIT')
 depends=('bash' 'coreutils' 'util-linux' 'sudo' 'pacman' 'snapper' 'limine-snapper-sync' 'limine-mkinitcpio-hook')
