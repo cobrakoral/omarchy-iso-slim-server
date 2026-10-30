@@ -245,7 +245,22 @@ refuses an update with /boot unmounted, then proves another cold boot works.
 The baseline ISO contains maintenance package 0.1.0. The stronger boot checker
 is delivered in package **0.1.1** and will be included by subsequent ISO builds;
 installing that signed package in disposable guests is part of these tests.
-The existing ISO is not silently replaced. New-version transitions for
+The existing ISO is not silently replaced. The signed package and its checksum
+are under `release/omarchy-server-0.1.1-1-any.pkg.tar.zst` and
+`release/SERVER-MAINTENANCE-SHA256SUMS`. After verifying the maintainer fingerprint
+listed above, an existing server can install the package normally:
+
+```sh
+sha256sum --check SERVER-MAINTENANCE-SHA256SUMS
+gpg --verify omarchy-server-0.1.1-1-any.pkg.tar.zst.sig \
+  omarchy-server-0.1.1-1-any.pkg.tar.zst
+sudo pacman-key --add UNOFFICIAL-SIGNING-KEY.asc
+sudo pacman-key --lsign-key 7C5C6FEB40A5B493007FAA3650B1EB533F640140
+sudo pacman -U ./omarchy-server-0.1.1-1-any.pkg.tar.zst
+sudo omarchy-server-boot-check
+```
+
+New-version transitions for
 limine-mkinitcpio-hook and the headless snapshot core remain to be tested when
 suitable additional versions are staged.
 

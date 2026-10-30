@@ -103,3 +103,67 @@ recipe. Repository channels are mutable; source/container pins and package
 locks document this build, but byte-identical future output is not promised.
 
 No upstream pull request was opened.
+
+## Maintenance acceptance — 2026-10-30
+
+The original ISO above remains unchanged. This round delivers signed
+`omarchy-server 0.1.1-1` and build-source changes, not a refreshed ISO.
+Tested implementation commit: `4d0f180` (runtime change: `07c555b`).
+Receipts include SHA-256 hashes of the tested source files.
+
+The real system upgrade passed with external guest networking blocked and
+Required package signatures. Historical userspace was deliberately constructed
+from signed Arch archive packages. The newer kernel comes from **Omarchy edge**;
+this does not certify a stable-channel release-to-release upgrade.
+
+| Component | Before | After upgrade | After snapshot restore |
+|---|---|---|---|
+| Running Omarchy kernel | 7.2.8-9-omarchy | 7.2.8-10-omarchy | 7.2.8-9-omarchy |
+| systemd and matching libs/sysvcompat/ukify | 262-1 | 262.1-1 | 262-1 |
+| Limine package | 12.9.3-1 | 12.9.4-1 | 12.9.3-1 |
+| Installed package count | 175 | 175 | 175 |
+
+All three cold-boot observations passed key SSH, networkd/resolved, snapshot
+cleanup/watcher service checks, package exclusion checks, installed module
+checks and deployed kernel/initramfs verification. Recovery selected an actual
+Limine snapshot entry, booted its writable overlay, ran the upstream restore
+utility and cold-booted the restored writable root. Restored package versions
+and the running kernel matched the historical baseline.
+
+Additional real QEMU tests passed on BIOS and encrypted UEFI installations:
+
+- Reject a corrupted BIOS kernel or stale UKI release.
+- Restore the correct artifact and verify it again.
+- Refuse an update with /boot unmounted, before snapshot creation or a package transaction.
+- Remount /boot and complete another cold boot (including LUKS unlock).
+
+Regression results: **77 passed** (9 new boot-integrity checks, 10 server
+checks, 58 shared checks); Bash syntax and error-level shellcheck pass.
+The QEMU package share has a fixed PCI address so adding/removing test media
+does not change disk device placement. Repository preparation prevents a
+lexically later old kernel filename from downgrading its package index and
+asserts the staged versions before a guest is started.
+
+Final evidence directories under `test-runs/server/`:
+
+- `20261030-181152-system-upgrade/`
+- `20261030-181401-boot-check-bios/`
+- `20261030-181007-boot-check-luks/`
+
+The tests use new qcow2 overlays; the original 2026-10-29 acceptance backing
+disks remain unchanged. Superseded overlays generated during this maintenance
+round were retired while retaining their logs and receipts. No unrelated data
+or original release artifact was removed.
+
+Signed package: `release/omarchy-server-0.1.1-1-any.pkg.tar.zst`, **17,957 bytes**.
+SHA-256: `83257e807999fe250a6046c792649277281d21f9c5fd0010a6af037d8c7fc3ad`.
+Its detached signature and `SERVER-MAINTENANCE-SHA256SUMS.asc` verify with the
+same unofficial maintainer identity. Selected evidence is bundled in
+`release/server-maintenance-evidence.tar.gz`; private test keys, credential
+media, SSH command logs and restore terminal input transcripts are excluded.
+
+New-version transitions for limine-mkinitcpio-hook and the snapshot sync core
+remain outstanding; those packages stayed at 1.40.0-2 and 1.32.1-2 respectively.
+Physical hardware, Secure Boot and the remaining operational roadmap are still
+outside this round. Only about 878 MiB free remained after acceptance; a fresh
+ISO build requires additional workspace (documented baseline: 12 GiB free).
