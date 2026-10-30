@@ -52,7 +52,9 @@ def qmp(path, command, arguments=None):
 
 
 class VM:
-    def __init__(self, directory, disk, port, media, installer=False, bios=False):
+    def __init__(
+        self, directory, disk, port, media, installer=False, bios=False, share=None
+    ):
         self.path = directory
         self.port = port
         vars = directory / "OVMF_VARS.fd"
@@ -98,6 +100,13 @@ class VM:
             del args[index : index + 4]
         for i, cd in enumerate(media):
             args += ["-drive", f"file={cd},media=cdrom,readonly=on,index={i+2}"]
+        if share is not None:
+            args += [
+                "-fsdev",
+                f"local,id=packages,path={share},security_model=none,readonly=on",
+                "-device",
+                "virtio-9p-pci,fsdev=packages,mount_tag=packages,addr=0x9",
+            ]
         if installer:
             args += ["-boot", "order=d"]
         self.log = (directory / f"serial-{time.time_ns()}.log").open("w")

@@ -116,8 +116,8 @@ omarchy-update
 ```
 
 The server update command takes a lock, creates a snapshot, performs a full
-pacman system upgrade, runs Limine deployment, and verifies the UKI exists.
-It stops on failed snapshots/upgrades/boot deployment. It deliberately
+pacman system upgrade, runs Limine deployment, and verifies the deployed kernel and initramfs match the installed modules.
+It refuses an unmounted /boot before snapshotting or upgrading and stops on failed snapshots/upgrades/boot deployment. The boot check validates the UEFI UKI release and embedded kernel hash, or the BIOS kernel hash, and checks the initramfs module version. It deliberately
 runs only the applicable package/boot workflow: desktop migrations, GUI
 restart helpers, AUR builds, and mise provisioning do not run here.
 The custom server packages currently update by rebuilding/installing this
@@ -203,6 +203,51 @@ interactive recovery utility, and checks the normal writable root after a
 further reboot. The update test upgrades a real fixture package from version
 1 to 2 using local media, checks its pre-update snapshot, exercises numbered
 retention and cleanup, and reboots the updated installation.
+
+## Real system upgrade and recovery acceptance
+
+The fixture update test remains useful for package-transaction regression coverage.
+The additional real-package test stages signature-checked Arch archive packages
+for systemd 262 and Limine 12.9.3, boots that constructed historical userspace,
+then uses the actual server updater to install systemd 262.1, Limine 12.9.4 and
+Omarchy kernel 7.2.8-10. The kernel is explicitly from **edge**; this is a
+controlled compatibility test, not stable release-to-release certification.
+
+Run this after building the baseline ISO (keep its isolated package cache) and
+completing a default UEFI acceptance installation. Host dependencies additionally
+include makepkg/repo-add and access to the configured maintainer signing key.
+Preparation downloads archives and never installs packages on the host. The
+QEMU guest has no external network access; a read-only 9p share supplies signed
+packages and pacman uses Required package signature policy.
+
+```sh
+python test/server/boot_check.py
+python test/server/prepare_system_upgrade.py
+python test/server/system_upgrade.py test-runs/server/<successful-base-run> \
+  .server-work/system-upgrade/packages
+python test/server/boot_check_integration.py test-runs/server/<successful-bios-run> \
+  .server-work/system-upgrade/packages --bios
+python test/server/boot_check_integration.py test-runs/server/<successful-encrypted-run> \
+  .server-work/system-upgrade/packages --encrypt
+```
+
+Each run creates a new qcow2 overlay and leaves the backing acceptance disk
+unchanged. Keep backing disks until dependent overlays are retired. Do not run
+a backing guest while its overlay is being tested. Real-upgrade acceptance checks
+the running kernel, installed modules, deployed boot payload, SSH, networkd,
+resolved and snapshot services before and after upgrading. It then uses the real
+Limine snapshot menu and restore command, cold-boots the restored root and
+checks the earlier package versions and kernel again. Receipts, source hashes,
+archive provenance and serial/SSH logs remain in the recorded test directories.
+Boot-check integration also rejects a stale UKI or corrupted BIOS kernel and
+refuses an update with /boot unmounted, then proves another cold boot works.
+
+The baseline ISO contains maintenance package 0.1.0. The stronger boot checker
+is delivered in package **0.1.1** and will be included by subsequent ISO builds;
+installing that signed package in disposable guests is part of these tests.
+The existing ISO is not silently replaced. New-version transitions for
+limine-mkinitcpio-hook and the headless snapshot core remain to be tested when
+suitable additional versions are staged.
 
 ## Source pins and upstream tracking
 
