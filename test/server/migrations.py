@@ -148,6 +148,38 @@ class MigrationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "server edition"):
                 migration.main()
 
+    def test_unfinished_migration_cannot_disappear(self):
+        self.script(content="exit 1\n")
+        with self.assertRaises(subprocess.CalledProcessError):
+            migration.migrate(self.base, self.state)
+        self.entries = []
+        self.save()
+        with self.assertRaisesRegex(ValueError, "Unfinished migration"):
+            migration.migrate(self.base, self.state)
+
+    def test_unfinished_migration_cannot_change_without_review(self):
+        entry = self.script(content="exit 1\n")
+        with self.assertRaises(subprocess.CalledProcessError):
+            migration.migrate(self.base, self.state)
+        path = self.base / entry["file"]
+        path.write_text("exit 0\n")
+        entry["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+        self.save()
+        with self.assertRaisesRegex(ValueError, "Unfinished migration"):
+            migration.migrate(self.base, self.state)
+
+    def test_committed_receipt_reconciles_a_leftover_journal(self):
+        entry = self.script()
+        migration.migrate(self.base, self.state)
+        migration.atomic_json(
+            self.state / "pending.json", {**entry, "phase": "running"}
+        )
+        migration.migrate(self.base, self.state, pending=True)
+        self.assertTrue((self.state / "pending.json").exists())
+        migration.migrate(self.base, self.state)
+        self.assertFalse((self.state / "pending.json").exists())
+        self.assertEqual(self.proof.read_text(), "x")
+
 
 class RepositoryPolicyTests(unittest.TestCase):
     def test_config_requires_both_signatures_and_trusted_keys(self):

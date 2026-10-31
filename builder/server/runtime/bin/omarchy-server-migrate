@@ -38,6 +38,15 @@ def atomic_json(path, value):
         Path(name).unlink(missing_ok=True)
 
 
+def durable_unlink(path):
+    path.unlink()
+    fd = os.open(path.parent, os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def plan(base=BASE, state=STATE):
     entries = json.loads((base / "manifest.json").read_text())
     if not isinstance(entries, list):
@@ -80,6 +89,24 @@ def plan(base=BASE, state=STATE):
 def migrate(base=BASE, state=STATE, pending=False):
     # Validate the entire manifest/ledger before running any migration.
     steps = plan(base, state)
+    journal = state / "pending.json"
+    if journal.exists():
+        interrupted = json.loads(journal.read_text())
+        prior = next(
+            (step for step in steps if step[0]["id"] == interrupted["id"]), None
+        )
+        if (
+            prior is None
+            or prior[0]["scope"] == "desktop"
+            or prior[0]["sha256"] != interrupted["sha256"]
+            or prior[0]["scope"] != interrupted["scope"]
+        ):
+            raise ValueError(
+                "Unfinished migration changed or disappeared; review the prior attempt before clearing its pending journal"
+            )
+        if prior[3] and not pending:
+            # A crash after the durable receipt but before journal removal.
+            durable_unlink(journal)
     for entry, path, receipt, done in steps:
         name = entry["id"]
         if entry["scope"] == "desktop":
@@ -90,7 +117,6 @@ def migrate(base=BASE, state=STATE, pending=False):
         if pending:
             print(name)
             continue
-        journal = state / "pending.json"
         atomic_json(journal, {**entry, "phase": "running"})
         print("Running", entry["scope"], "migration:", name, flush=True)
         environment = os.environ.copy()
@@ -103,12 +129,7 @@ def migrate(base=BASE, state=STATE, pending=False):
         atomic_json(
             receipt, {**entry, "applied_at": datetime.now(timezone.utc).isoformat()}
         )
-        journal.unlink()
-        fd = os.open(state, os.O_DIRECTORY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+        durable_unlink(journal)
 
 
 def main():
