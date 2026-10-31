@@ -117,5 +117,52 @@ class BuildInputsTests(unittest.TestCase):
             inputs.verify(self.root, self.out)
 
 
+class ReceiptBindingTests(unittest.TestCase):
+    def setUp(self):
+        import copy
+        import hashlib
+        import release
+
+        self.release = release
+        self.receipt = {
+            "iso_sha256": "a" * 64,
+            "source_dirty": False,
+            "packages": {"systemd": "262.1-1"},
+            "source_revision": "b" * 40,
+            "harness_sha256": hashlib.sha256(b"committed harness").hexdigest(),
+        }
+        self.patcher = patch.object(
+            release.subprocess, "check_output", return_value=b"committed harness"
+        )
+        self.patcher.start()
+        self.addCleanup(self.patcher.stop)
+
+    def check(self):
+        self.release.validate_receipt(self.receipt, "a" * 64, {"systemd": "262.1-1"})
+
+    def test_committed_receipt_can_be_reused_by_a_later_qualifier(self):
+        self.check()
+
+    def test_substituted_iso_is_refused(self):
+        self.receipt["iso_sha256"] = "c" * 64
+        with self.assertRaises(ValueError):
+            self.check()
+
+    def test_dirty_test_source_is_refused(self):
+        self.receipt["source_dirty"] = True
+        with self.assertRaises(ValueError):
+            self.check()
+
+    def test_different_package_versions_are_refused(self):
+        self.receipt["packages"] = {"systemd": "262"}
+        with self.assertRaises(ValueError):
+            self.check()
+
+    def test_harness_hash_must_match_the_recorded_commit(self):
+        self.receipt["harness_sha256"] = "d" * 64
+        with self.assertRaises(ValueError):
+            self.check()
+
+
 if __name__ == "__main__":
     unittest.main()
