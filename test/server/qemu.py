@@ -64,6 +64,7 @@ class VM:
         bios=False,
         share=None,
         sparse_zeros=False,
+        networks=None,
     ):
         self.path = directory
         self.port = port
@@ -107,14 +108,23 @@ class VM:
             "-drive",
             f"if=virtio,format=qcow2,file={disk}"
             + (",discard=unmap,detect-zeroes=unmap" if sparse_zeros else ""),
-            "-netdev",
-            f"user,id=net0,restrict=on,hostfwd=tcp:127.0.0.1:{port}-:22",
-            "-device",
-            "virtio-net-pci,netdev=net0",
             "-qmp",
             f"unix:{self.qmp},server=on,wait=off",
             "-no-reboot",
         ]
+        if networks is None:
+            # Existing offline acceptance keeps its egress-blocked single NIC.
+            args += [
+                "-netdev",
+                f"user,id=net0,restrict=on,hostfwd=tcp:127.0.0.1:{port}-:22",
+                "-device",
+                "virtio-net-pci,netdev=net0",
+            ]
+        else:
+            if not networks:
+                raise ValueError("A guest needs a management NIC")
+            for index, network in enumerate(networks):
+                args += network.arguments(index, port if index == 0 else None)
         if bios:
             index = (
                 args.index(
