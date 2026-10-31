@@ -201,6 +201,8 @@ def install(args):
     app = Path("/opt/server-acceptance")
     app.mkdir()
     shutil.copy2(Path(__file__).with_name("operational_workload.py"), app / "app.py")
+    (app / "app.py").chmod(0o644)
+    app.chmod(0o755)
     config = Path("/etc/server-acceptance.json")
     config.write_text(json.dumps({"port": 9080, "fixture_only": True}) + "\n")
     config.chmod(0o640)
