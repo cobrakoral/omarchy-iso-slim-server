@@ -1,12 +1,12 @@
 pkgname=omarchy-server
-pkgver=0.1.2
+pkgver=0.2.0
 pkgrel=1
 pkgdesc='Unofficial minimal Omarchy server maintenance and snapshot integration'
 arch=('any')
 options=('!debug' '!strip')
 url='https://github.com/cobrakoral/omarchy-iso-slim-server'
 license=('MIT')
-depends=('bash' 'coreutils' 'util-linux' 'sudo' 'pacman' 'snapper' 'limine-snapper-sync' 'limine-mkinitcpio-hook' 'systemd-ukify')
+depends=('python' 'bash' 'coreutils' 'util-linux' 'sudo' 'pacman' 'snapper' 'limine-snapper-sync-server>=1.32.1-3' 'omarchy-server-keyring' 'limine-mkinitcpio-hook' 'systemd-ukify')
 backup=('etc/limine-entry-tool.d/omarchy-server.conf' 'etc/mkinitcpio.conf.d/omarchy-server.conf')
 package() {
   cd "$startdir"
@@ -18,6 +18,10 @@ package() {
   install -Dm644 limine.conf "$pkgdir/etc/limine-entry-tool.d/omarchy-server.conf"
   install -Dm644 mkinitcpio.conf "$pkgdir/etc/mkinitcpio.conf.d/omarchy-server.conf"
   install -Dm644 upstream/etc/limine-entry-tool.d/omarchy-uki.conf "$pkgdir/etc/limine-entry-tool.d/omarchy-uki.conf"
+  install -Dm644 repository.conf "$pkgdir/usr/share/omarchy/server-repository.conf"
+  install -Dm644 95-omarchy-server-migrate.hook "$pkgdir/usr/share/libalpm/hooks/95-omarchy-server-migrate.hook"
+  install -d "$pkgdir/usr/share/omarchy/server-migrations"
+  install -m644 migrations/* "$pkgdir/usr/share/omarchy/server-migrations/"
   printf 'server\n' | install -Dm644 /dev/stdin "$pkgdir/etc/omarchy-edition"
   printf '84782475aeb885c8d05f9e85b6ad0f1a0add60e5\n' | install -Dm644 /dev/stdin "$pkgdir/usr/share/omarchy/server-upstream-revision"
 }

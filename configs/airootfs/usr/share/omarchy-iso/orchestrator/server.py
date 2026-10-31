@@ -92,6 +92,26 @@ def validate(ctx):
         shared._authorized_keys(ctx.authorized_keys_path)
 
 
+def populate_server_keyring(ctx):
+    # The shared target-keyring worker has finished. Populate only this edition's
+    # extra trust anchor, then stop its agents so target unmount cannot be held.
+    try:
+        chroot(ctx, "pacman-key", "--populate", "omarchy-server")
+    finally:
+        subprocess.run(
+            [
+                "arch-chroot",
+                str(ctx.target),
+                "gpgconf",
+                "--homedir",
+                "/etc/pacman.d/gnupg",
+                "--kill",
+                "all",
+            ],
+            check=False,
+        )
+
+
 def configure(ctx):
     from server_config import network_config
 
@@ -145,6 +165,9 @@ def configure(ctx):
     online = Path("/usr/share/omarchy-iso/server-online.conf").read_text()
     write(ctx, "etc/pacman.conf", online)
     shared._join_target_keyring_init(ctx)
+    populate_server_keyring(ctx)
+    chroot(ctx, "omarchy-server-migrate")
+    chroot(ctx, "omarchy-server-repository", "--check")
     chroot(
         ctx, "bash", "-euo", "pipefail", "/usr/share/omarchy/install/config/snapper.sh"
     )

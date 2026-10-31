@@ -8,6 +8,7 @@ if (( EUID != 0 )); then exec sudo -- "$0" "$@"; fi
 exec 9>/run/omarchy-server-update.lock
 flock -n 9 || { echo 'Another server update is running.' >&2; exit 1; }
 mountpoint -q /boot || { echo "Cannot update: /boot is not mounted." >&2; exit 1; }
+omarchy-server-repository --check
 # These are minimum working reserves, not an estimate of every possible upgrade.
 # Pacman still performs its normal transaction-specific disk-space checks.
 for spec in '/:536870912' '/boot:134217728'; do
@@ -69,6 +70,8 @@ if grep -q '^error:' "$log"; then
   printf '%s\n' 'Pacman reported an error, possibly a failed transaction hook; package changes may already have been applied. Inspect the transcript, repair and rerun the failed hook/scriptlet or reinstall the affected packages; then acknowledge the repair by removing /var/lib/omarchy-server/update-state before retrying.' | tee -a "$log" >&2
   failure 1
 fi
+record_stage migrations
+omarchy-server-migrate 2>&1 | tee -a "$log"
 record_stage boot-artifacts
 limine-update 2>&1 | tee -a "$log"
 omarchy-server-boot-check 2>&1 | tee -a "$log"

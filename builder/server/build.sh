@@ -37,7 +37,9 @@ cp /builder/server/automated.sh "$work/airootfs/root/.automated_script.sh"
 cp /builder/server/configurator "$work/airootfs/root/configurator"
 mkdir -p "$work/airootfs/usr/share/omarchy-iso"
 cp /builder/server/config.py "$work/airootfs/usr/share/omarchy-iso/server_config.py"
-cp "$online" "$work/airootfs/usr/share/omarchy-iso/server-online.conf"
+# Installed systems retain the signed server channel, independently of the build mirror.
+sed '/^\[options\]/a CheckSpace' "$online" > "$work/airootfs/usr/share/omarchy-iso/server-online.conf"
+printf '\nInclude = /etc/pacman.d/omarchy-server.conf\n' >> "$work/airootfs/usr/share/omarchy-iso/server-online.conf"
 cp /builder/server/check-packages.py "$work/airootfs/usr/share/omarchy-iso/check-server-packages.py"
 printf 'server\n' > "$work/airootfs/etc/omarchy-edition"
 # Releng's normal root shell is zsh; the server live console needs only Bash.
@@ -78,23 +80,11 @@ for name in sys.argv[1:]:
         else: out.append(line)
     p.write_text(''.join(out))
 PY
-# Build a pinned headless variant from the signature-verified Omarchy archive.
-mkdir -p /tmp/headless-db
-pacman --config "$online" --dbpath /tmp/headless-db --cachedir "$mirror" -Syddw --noconfirm limine-snapper-sync
-cp -a /builder/server/limine-snapper-sync /tmp/headless-package
-cp "$mirror/limine-snapper-sync-1.32.1-2-x86_64.pkg.tar.zst" /tmp/headless-package/
-chown -R nobody:nobody /tmp/headless-package
-(cd /tmp/headless-package && sudo -u nobody makepkg --nodeps --noconfirm)
-cp /tmp/headless-package/limine-snapper-sync-server-*.pkg.tar.zst "$mirror/"
-# Build our independent server package; it does not provide/conflict with desktop.
-cp -a /builder/server/runtime /tmp/server-package
-chown -R nobody:nobody /tmp/server-package
-(cd /tmp/server-package && sudo -u nobody makepkg --nodeps --noconfirm)
-cp /tmp/server-package/omarchy-server-*.pkg.tar.zst "$mirror/"
-repo-add "$mirror/server.db.tar.gz" "$mirror"/omarchy-server-*.pkg.tar.zst "$mirror"/limine-snapper-sync-server-*.pkg.tar.zst
-# This locally built package is covered by the ISO checksum/signature. Every
-# upstream package is downloaded with the normal Required signature policy.
-sed '/^\[omarchy\]/i [server]\nSigLevel = Never\nServer = file:///server-cache/mirror/\n' "$online" > /tmp/server-with-local.conf
+# These packages were built and signed outside this container. Only public trust
+# anchors and signed artifacts are mounted; no private signing keys are copied.
+pacman-key --add /server-repository/omarchy-server.asc
+pacman-key --lsign-key 7C5C6FEB40A5B493007FAA3650B1EB533F640140
+sed '/^\[omarchy\]/i [omarchy-server]\nSigLevel = PackageRequired DatabaseRequired TrustedOnly\nServer = file:///server-repository/\n' "$online" > /tmp/server-with-local.conf
 online=/tmp/server-with-local.conf
 mapfile -t target < <(grep -Ev '^(#|$)' /builder/server/target.packages)
 mapfile -t live < <(grep -Ev '^(#|$)' /builder/server/live.packages)

@@ -204,5 +204,45 @@ class ServerTests(unittest.TestCase):
             config.make_config({}, 4 * 1024**3)
 
 
+class ServerKeyringTests(unittest.TestCase):
+    def module(self):
+        package = types.ModuleType("orchestrator")
+        package.__path__ = []
+        with patch.dict(
+            sys.modules,
+            {
+                "orchestrator": package,
+                "orchestrator.phases_impl": types.SimpleNamespace(),
+            },
+        ):
+            return load(
+                "orchestrator.server_keyring",
+                "configs/airootfs/usr/share/omarchy-iso/orchestrator/server.py",
+            )
+
+    def test_populates_only_server_anchor_and_stops_agents(self):
+        server = self.module()
+        ctx = types.SimpleNamespace(target=Path("/mnt"))
+        with patch.object(server, "chroot") as chroot, patch.object(
+            server.subprocess, "run"
+        ) as run:
+            server.populate_server_keyring(ctx)
+        chroot.assert_called_once_with(
+            ctx, "pacman-key", "--populate", "omarchy-server"
+        )
+        self.assertIn("gpgconf", run.call_args.args[0])
+        self.assertFalse(run.call_args.kwargs["check"])
+
+    def test_populate_failure_still_stops_agents(self):
+        server = self.module()
+        ctx = types.SimpleNamespace(target=Path("/mnt"))
+        with patch.object(
+            server, "chroot", side_effect=RuntimeError("test failure")
+        ), patch.object(server.subprocess, "run") as run:
+            with self.assertRaises(RuntimeError):
+                server.populate_server_keyring(ctx)
+        run.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
