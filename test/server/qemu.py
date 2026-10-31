@@ -2,6 +2,7 @@
 """Real offline installation acceptance. Artifacts remain in test-runs/server/."""
 
 import argparse
+import fcntl
 import importlib.util
 import json
 import os
@@ -66,6 +67,17 @@ class VM:
     ):
         self.path = directory
         self.port = port
+        ports = Path(tempfile.gettempdir()) / f"omarchy-qemu-ports-{os.getuid()}"
+        ports.mkdir(mode=0o700, exist_ok=True)
+        self.port_guard = (ports / str(port)).open("a")
+        try:
+            fcntl.flock(self.port_guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                probe.bind(("127.0.0.1", port))
+        except OSError as error:
+            self.port_guard.close()
+            raise ValueError(f"Refusing busy guest SSH port {port}") from error
         vars = directory / "OVMF_VARS.fd"
         if not vars.exists():
             shutil.copy("/usr/share/edk2/x64/OVMF_VARS.4m.fd", vars)
@@ -145,6 +157,7 @@ class VM:
         self.child.close()
         self.log.close()
         self.control.cleanup()
+        self.port_guard.close()
 
     def ssh(self, command, check=True):
         result = sp.run(
@@ -185,7 +198,12 @@ class VM:
 
     def wait_ssh(self):
         for _ in range(180):
-            if self.ssh("true", check=False).returncode == 0:
+            if not self.child.isalive():
+                self.child.expect(pexpect.EOF, timeout=5)
+                raise RuntimeError(
+                    "Guest exited before SSH: " + self.child.before[-2000:]
+                )
+            if self.ssh("true", check=False).returncode == 0 and self.child.isalive():
                 return
             if not self.child.isalive():
                 self.child.expect(pexpect.EOF, timeout=5)
