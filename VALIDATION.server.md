@@ -1,6 +1,6 @@
 # Omarchy Slim Server — measured validation
 
-Latest validation: **2026-10-31, live networking and emulated NIC matrix on the signed 0.2.0 ISO**.
+Latest validation: **2026-10-31, fresh checkout/cold-cache release qualification**.
 See the final section for current evidence. The original baseline was validated on 2026-10-29. This is an **unofficial community build**, not an
 Omarchy release or endorsement.
 
@@ -444,3 +444,74 @@ Physical NICs/storage, Wi-Fi, public IPv6 Internet and Secure Boot remain
 unverified. The next release-maintenance milestone is fresh-checkout/empty-cache
 reproduction and automated release acceptance; physical deployment checks still
 need the relevant hardware and network.
+
+## Fresh checkout, cold-cache build and automated qualification — 2026-10-31
+
+A new ISO was built from a fresh GitHub checkout and the clean pinned archiso
+submodule. **No earlier project package cache was seeded**. The live signed
+server channel was downloaded and authenticated independently; the upstream
+transaction was downloaded afresh. The initial container remained digest-pinned.
+
+- Artifact: `release/server-rebuild-2026.10.31/omarchy-slim-server-unofficial-2026.10.31-x86_64.iso`
+- Size: **1,255,964,672 bytes** (1.170 GiB).
+- SHA-256: `553c3424ec8cd835167525c4e47dcb20f170e42b52d24bc160f860cc35721036`.
+- Image source: `8dc00f363aa9457b6709277adbe36be17909ea78`.
+- Acceptance runner: `7eabba50665c1ae5482394a8e63e154b7ce9bcd2`.
+- Archiso: `424e78130db2af6c1ceb55b442d7914b1109ff2b`.
+- Base/cloud package closures: **176 / 203**, with the same versions and
+  package transaction as the earlier accepted 0.2.0 image.
+
+| Fresh ISO installation | Exact installed package versions | Boot, SSH, services and snapshots |
+|---|---|---|
+| Default UEFI | 176, matched build closure | Passed |
+| Cloud-init UEFI | 203, matched base + 27-package delta | Passed |
+| BIOS | 176, matched build closure | Passed |
+| Encrypted UEFI | 176, matched build closure | Passed, including passphrase unlock |
+
+All installations began with new standalone disposable disks and ran the real
+offline installer. Receipts bind the ISO SHA-256, clean source revision,
+committed harness hash and installed package/version map. Default and cloud
+systems then verified installed signed-channel trust without manual key import.
+The default trust overlay booted an actual Limine snapshot, restored it,
+rebooted to writable normal root and verified boot/package/service health and
+repository trust again. The source and ISO digests remained unchanged.
+
+The full upstream VM-free shell suite and **378 Python tests** ran against a
+sparse checkout of official runtime `84782475aeb885c8d05f9e85b6ad0f1a0add60e5`;
+Python finished successfully with **3 skips**. An initial host-side attempt had
+selected an older installed runtime and failed three desktop keyboard-label
+comparisons; selecting the actual pinned runtime resolved those comparisons.
+The qualifier fetches that runtime explicitly. **50 server checks** also passed:
+12 edition/configuration, 15 migrations, 9 boot integrity and 14 release-input/
+receipt checks. The completed-output refusal was additionally exercised against
+the real qualified release, with all its existing metadata unchanged.
+
+The first qualification attempt stopped at its 8 GiB reserve after the first
+two installs. It emitted no final success record. The runner now synchronizes
+completed compaction frees before checking capacity, and can resume matching
+completed cases. Resume verifies the ISO, unchanged production build files,
+package versions, committed harness and compacted disk hashes; earlier receipts
+retain their original revisions. Build and acceptance revisions are distinct in
+the final aggregate. A completed qualified generation refuses another resume.
+
+Only the newly generated profile and unused Docker image were discarded.
+After the cold build completed, 478 byte-identical archive files shared extents
+with retained archives, preserving all paths and SHA-256 values. This storage
+optimization happened **after** the independent download/build; it was not
+input cache seeding. Newly installed disks were compacted or safely rebased to
+the first accepted disk only after a complete virtual-byte comparison. Bases
+and dependencies are retained; existing generations/disks remain untouched.
+Encrypted guest data remains encrypted. Host snapshots remain disabled.
+
+The new ISO and final checksums carry the maintainer signatures. Signed
+`server-release-acceptance.json`, source/build/package metadata and sanitized
+evidence are beside the ISO. Credential media, private keys, serial/password
+transcripts, raw SSH command logs and VM disks are excluded from the bundle.
+Detailed private test paths are retained in the aggregate for local replay.
+
+This verifies **functional reproduction from a fresh checkout and empty build
+cache**, not byte-identical ISO reproduction. Btrfs identities and embedded
+source/build metadata differ. Upstream mirrors remain mutable; preserving
+archives is necessary for a later replay of the exact package versions.
+No shared production installer/image or desktop code changed, so a desktop ISO
+was not rebuilt. Physical hardware, public IPv6 and Secure Boot remain unverified.

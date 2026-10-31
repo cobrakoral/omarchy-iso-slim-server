@@ -162,6 +162,10 @@ def main():
     )
     args = parser.parse_args()
     output, cache = args.output.resolve(), args.cache.resolve()
+    if args.resume_work and (output / "server-release-acceptance.json").exists():
+        raise ValueError(
+            "Completed qualified release is immutable; use a new generation"
+        )
     for path in (output, cache):
         if path.exists() and args.resume_work is None:
             raise ValueError("Use NEW output/cache paths: " + str(path))
@@ -309,7 +313,7 @@ def main():
     # Generated profile only: checked completed ISO and source provenance above.
     # Retain downloaded archives, metadata and every existing generation.
     profile = cache / "profile"
-    if profile.exists():
+    if profile.exists() and not args.resume_work:
         mounts = subprocess.check_output(
             ["findmnt", "-rn", "-o", "TARGET"], text=True
         ).splitlines()

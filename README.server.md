@@ -33,8 +33,13 @@ OMARCHY_EDITION=server bin/omarchy-iso-make --no-boot-offer
 The selector dispatches before the desktop builder handles caches. Server
 work belongs exclusively to `.server-work/`; no host system package cache is
 purged. Each build gets a new cache/output generation; earlier project package
-archives seed it through hard links and remain preserved. Override
-`OMARCHY_SERVER_CACHE_DIR` or `OMARCHY_SERVER_RELEASE_DIR` only deliberately. Desktop builds retain their existing default behavior.
+archives seed it through hard links and remain preserved. Use `--empty-cache`
+to disable that seeding. Output and cache paths must be absent or empty;
+a populated generation is refused before Docker starts. Builds require clean
+committed sources, the pinned clean archiso submodule, and a container digest.
+The wrapper records inputs before building and rejects a source change during
+the build. Override `OMARCHY_SERVER_CACHE_DIR` or `OMARCHY_SERVER_RELEASE_DIR`
+only deliberately. Desktop builds retain their existing default behavior.
 The server downloads the manifest closure directly: it never builds and
 strips a desktop image. The target root is the official packed Btrfs image;
 archiso provides the live ISO's BIOS Syslinux and x86_64 UEFI GRUB routes.
@@ -63,6 +68,69 @@ gpg --verify omarchy-slim-server-unofficial-YYYY.MM.DD-x86_64.iso.sig \
   omarchy-slim-server-unofficial-YYYY.MM.DD-x86_64.iso
 ```
 The installed server channel requires trusted package **and database** signatures.
+
+## Fresh checkout and automated release qualification
+
+From a fresh checkout of the desired committed revision, initialize its pinned
+submodule and import the verified maintainer public key, then run:
+
+```sh
+python3 test/server/release.py \
+  --output "$PWD/release/server-fresh-$(date +%Y%m%d-%H%M%S)" \
+  --cache "$PWD/.server-work/cold-$(date +%Y%m%d-%H%M%S)"
+```
+
+Both paths must be new. The qualifier downloads and verifies the published
+signed server packages independently, uses an empty project build cache, and
+never seeds archives from an earlier project generation. It fetches a sparse
+checkout of the pinned official runtime for the full upstream tests, avoiding
+an accidental comparison with an older host installation. The original
+container digest and clean source/submodule revisions are recorded. A cold
+build needs working upstream mirrors and network access; the subsequent
+installation tests run offline.
+
+The automated sequence runs the upstream VM-free shell/Python suite and the
+server tests, builds the ISO, checks clean source provenance, and installs
+fresh default UEFI, cloud-init UEFI, BIOS and encrypted UEFI guests. It compares
+each installed package/version map against the build's base/cloud closures.
+Acceptance receipts bind the ISO SHA-256, source revision, source cleanliness
+and harness hash. The qualifier then tests installed channel trust without
+manual key import and boots/restores an actual snapshot, followed by normal
+root boot and another installed-trust check. Any failed command prevents the
+final `server-release-acceptance.json` success record.
+
+To limit space, it removes only that completed generation's generated
+`cache/profile` after build verification. Downloaded archives and provenance
+remain. Newly created test disks are compacted only after QEMU stops and
+`qemu-img compare` verifies identical virtual contents; no pre-existing test
+disk is compacted or removed. After each fresh installation, safe QEMU rebase
+can retain only the bytes differing from the first accepted disk. That base
+and all dependencies remain preserved. This storage step happens after the
+full fresh installation; it does not substitute a cloned system for a test. New guest cases require an 8 GiB free-space
+reserve, and a full build requires at least 12 GiB before it starts.
+
+If qualification stops, resume that completed build with the same output/cache
+paths and `--resume-work <private-work-directory>` printed in the step logs.
+The runner verifies the ISO checksum, unchanged production build inputs,
+exact package/version maps, clean-source receipts and the committed harness
+hash before reusing completed cases. It also checks the compacted disk hash.
+It does not rebuild into or overwrite the earlier output. Image-source and
+acceptance-source revisions are recorded separately when the runner advances.
+A failure never emits the final success record; earlier logs and cases remain.
+
+The output includes `server-build-inputs.json`, exact build/source/package
+metadata, the ISO and the aggregate acceptance record. Credential media,
+private keys, raw SSH and serial/password logs remain in private test/work
+directories. The qualifier does not publish artifacts or open a PR. The
+maintainer reviews the result and signs the ISO and final release checksums;
+raw build checksums alone are not a maintainer signature.
+
+This demonstrates a fresh functional rebuild and automated qualification.
+It does **not** promise byte-identical ISOs: Btrfs identity and build metadata
+vary, and Arch/Omarchy repositories move. Recorded package versions/hashes
+show the exact resolved transaction; preserving its archives is necessary
+for replay after mirrors remove a version. Pinning the initial container
+digest also does not freeze later package downloads.
 
 ## Current release and signed updates
 
