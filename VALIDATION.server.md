@@ -1,6 +1,7 @@
 # Omarchy Slim Server — measured validation
 
-Validated on 2026-10-29. This is an **unofficial community build**, not an
+Latest validation: **2026-10-31, signed channel and refreshed 0.2.0 ISO**.
+See the final section for current evidence. The original baseline was validated on 2026-10-29. This is an **unofficial community build**, not an
 Omarchy release or endorsement.
 
 ## Artifact
@@ -263,3 +264,98 @@ Selected current fault-test directories under `test-runs/server/`:
 - `20261031-014723-failure-power-cut-luks/`
 
 Real-package upgrade/restore: `20261031-014412-system-upgrade/`.
+
+
+## Signed channel, migrations and refreshed ISO — 2026-10-31
+
+This round delivers a real signed package-update channel and a refreshed
+**unofficial** server ISO. The earlier flat release and its signatures remain
+unchanged; superseded development candidates are not the release below.
+
+### Current artifacts
+
+- ISO: `release/server-0.2.0-2026.10.31-final/omarchy-slim-server-unofficial-2026.10.31-x86_64.iso`.
+- Size: **1,255,964,672 bytes** (1.170 GiB).
+- SHA-256: `8210964608eb3bae6297ceb16a199f93e1003bc1bccce5577d296a33c27cfe8a`.
+- ISO build-source revision: `581ee97d916b16f0096d2084848bf7073fdfbbe2`.
+- Signed package-source revision: `9ad55285912572d2f07f250a63ed8c9699a48b7a`.
+- Public artifact-branch commit: `bf975501ec65667ade9f9d46f802aa88107e8f52`.
+- Live repository: `https://raw.githubusercontent.com/cobrakoral/omarchy-iso-slim-server/server-packages/stable/x86_64/`.
+- Signed repository-manifest SHA-256: `65fa2b0ce73c07c8e725f3434f2fc6378c8901b161a3c03e84127c423182a642`.
+
+The live HTTPS check fetched all **16 authenticated files**, matched every hash
+to the signed manifest and verified the database, file database and all package
+signatures against the pinned maintainer. Repository aliases contain actual
+bytes rather than symlinks, as required by raw Git hosting.
+
+| Package | Version | Bytes | SHA-256 |
+|---|---|---:|---|
+| omarchy-server | 0.2.0-1 | 23,737 | `e3fe156b6a28b72bbdec340c15128144731422909209e0fa6dad8dea069d4fbf` |
+| omarchy-server-keyring | 20261031-1 | 12,999 | `3973828ae1d2a4b6e517c810ace403ee3b9aed35d4886f7588af690cf823248e` |
+| limine-snapper-sync-server | 1.32.1-3 | 9,441,389 | `d987f2a58fd8a54322087a4a8c1fc6200c85d874cc689383d849ad5fda5dab08` |
+
+The snapshot package upgrade is **packaging revision -2 to -3**, with the same
+pinned official 1.32.1-2 source archive. It does not claim a newer upstream core.
+The concrete server-package dependency prevents graphical notification packaging
+from being selected as a substitute. The small official runtime selection is
+checked against its revision/hash lock; curated vendoring remains explicit.
+
+### Passed acceptance
+
+| Scenario | Evidence |
+|---|---|
+| Signed upgrade from the original installed server | Runtime 0.1.0 -> 0.2.0, headless package 1.32.1-2 -> 1.32.1-3, added packaged trust anchor; real updater, migration hook, reboot; 176 packages |
+| Tampered database | Pacman rejected the database; installed runtime/core unchanged; corrected signed channel upgraded and rebooted |
+| Missing database signature | Required signature prevented the transaction; corrected signed channel upgraded and rebooted |
+| Unsigned package under signed metadata | Missing required package signature prevented installation; corrected signed channel upgraded and rebooted |
+| Wrong bootstrap fingerprint | Helper rejected the supplied key before altering Pacman configuration |
+| Known but untrusted database issuer | Public test key imported without local certification; Pacman rejected its database signature; corrected trusted channel upgraded and rebooted |
+| Scoped migration failure and repair | Desktop fixture never executed; reviewed shared/server work applied; failed action retained a journal and stopped update; repair resumed without rerunning applied work |
+| Immutable applied migrations and edition guard | Changed applied script/hash refused; desktop edition refused before execution |
+| Migration ledger rollback | Actual Limine snapshot boot, restore, normal-root reboot and upgrade reapplication restored correct configuration/ledger state; audit showed each applicable execution |
+| BIOS and encrypted UEFI upgrade | Same signed 0.2.0 channel, concrete headless package, migrations and cold boots; LUKS unlock passed |
+| Fresh default ISO installation | Entirely offline; normal login/SSH/networkd/resolved, package exclusions and snapshots; 176 packages |
+| Fresh optional cloud-init ISO installation | Entirely offline; separate instance provisioning and installer cidata separation; 203 packages |
+| Installed channel trust without bootstrap | Both fresh installations verified signed metadata and reinstalled the keyring through Required/TrustedOnly Pacman policy without adding or locally signing the key manually |
+| Exact delivered runtime identity | Installed updater, migration runner and channel helper hashes matched the signed package-source manifest on both installations |
+| Fresh ISO snapshot restoration | New default installation booted its actual snapshot, restored it, rebooted to normal writable @; signed-channel trust and boot integrity checked again |
+| Immutable package generation | Reuse retained archives/signatures byte-for-byte; recipe change without a version bump was refused |
+
+Regression results: **94 passed** (12 server, 15 migration/policy, 58 shared,
+9 boot integrity), plus an occupied-SSH-port refusal probe. The shared image,
+disk, desktop and generic target-keyring paths are unchanged. Only the server
+phase populates the additional trust anchor and stops its GPG agents. No full
+desktop ISO build was required or claimed for these server-only changes.
+
+The migration journal regression was reproduced before correction: unfinished
+work could disappear/change and a leftover journal after an applied receipt
+was not reconciled. The three added checks failed before the fix and passed
+after it. A pending ID/hash/scope must remain consistent until explicit repair;
+a durable completed receipt safely clears a stale journal without reexecution.
+
+The QEMU harness now reserves each forwarding port and refuses an occupied
+port before launch, preventing overlapping runs from attaching to another guest.
+An invalid overlapping run has no passing receipt and is excluded. All selected
+final cases used guarded independent ports. Earlier prototype failures and
+superseded build candidates remain recorded, not reported as successful releases.
+
+The channel publisher verifies pinned signatures, source hashes and origin,
+commits atomically to the fork's artifact branch, refuses versioned-file
+replacement and retains old archives for cached clients. No force push, upstream
+change, PR, GitHub Actions build, or private signing-key publication occurred.
+Fresh builds use isolated cache/output generations and preserve previous release
+signatures and package archives. The live channel uses strict package/database
+signature policy; the internal ISO mirror retains upstream's ISO-integrity model.
+
+The signed release manifest covers the new ISO, package-channel bundle, selected
+sanitized evidence, acceptance summary and this validation record. Private SSH
+keys, credential media, SSH command logs, private GPG material and interactive
+restore input transcripts are excluded from the evidence bundle. Test-only
+repositories (including the intentionally failing 0.2.1 fixture) were never
+published. The production runtime is 0.2.0.
+
+Physical hardware, Secure Boot, actual new-version upstream snapshot/hook
+transitions and byte-identical ISO reproduction remain unverified. The server
+still deliberately omits desktop provisioning and BBS/Docker/admin applications.
+Host snapshots remain disabled by administrator request; guest snapshot and
+rollback behavior remain enabled and tested.
