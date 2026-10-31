@@ -1,6 +1,6 @@
 # Omarchy Slim Server — measured validation
 
-Latest validation: **2026-10-31, fresh checkout/cold-cache release qualification**.
+Latest validation: **2026-10-31, operational workload and fresh-machine application recovery**.
 See the final section for current evidence. The original baseline was validated on 2026-10-29. This is an **unofficial community build**, not an
 Omarchy release or endorsement.
 
@@ -515,3 +515,85 @@ source/build metadata differ. Upstream mirrors remain mutable; preserving
 archives is necessary for a later replay of the exact package versions.
 No shared production installer/image or desktop code changed, so a desktop ISO
 was not rebuilt. Physical hardware, public IPv6 and Secure Boot remain unverified.
+
+## Operational workload and fresh-machine application recovery — 2026-10-31
+
+The final planned development round exercised the existing signed ISO
+`553c3424ec8cd835167525c4e47dcb20f170e42b52d24bc160f860cc35721036`.
+No ISO, runtime package or production installer change was needed. The synthetic
+fixture uses Python/SQLite already present in the **176-package** default server.
+
+| Measurement | Observed result |
+|---|---|
+| Workload duration | 300.19 seconds |
+| HTTP requests completed | 10,527 |
+| Durable writes acknowledged and verified | 2,634; no duplicate committed tokens |
+| Forced service process crash recovery | 1.44 seconds |
+| Transient failed attempts retried | 53 (all requests eventually completed) |
+| Request latency p95 / p99 | 62.7 / 85.8 ms |
+| Process descriptors before / after load | 4 / 4 |
+| Sampled maximum descriptors | 11 |
+| RSS before / after load | 24.1 / 29.2 MiB |
+| Backup database cut | 2,638 records, integrity and digest matched |
+| Restored filesystem entries | 30; modes/owners/ACLs/xattrs/symlink/hardlink checked |
+| Recovery including fresh OS installation | 125.78 seconds |
+| Restore portion | 21.62 seconds |
+| Acknowledged records after backup cut, absent from recovery | 26 |
+
+This is a small synthetic fixture under QEMU on the development host, not a
+production performance benchmark, availability guarantee or multiweek stability
+claim. One forced process crash was exercised; arbitrary host power-loss windows
+were not tested in this round. The fixture listened only on loopback.
+
+The source was a new copy-on-write operational guest on the accepted 0.2.0
+baseline. Its five-minute measured workload, database digest and cold-boot
+continuity were verified. A backup-helper correction was then applied: static
+paths are absolute, live SQLite/WAL files are excluded from file copying, and
+the database uses SQLite's online backup API. Resume checked the committed
+workload records and unchanged deployed application hash before reusing that
+completed load. The original workload receipt remains intact and hashed.
+Static source metadata matched its staging copy; concurrent write acknowledgments
+and a health probe continued while the database backup was taken.
+
+The archive was encrypted with AES-256/GnuPG and signed with the pinned maintainer
+key outside the guest. Tampered signature/ciphertext and a missing key were
+rejected, and no unverified archive was delivered to the replacement machine.
+Nine archive-admission regressions rejected traversal, unrelated identity files,
+device nodes, duplicate entries and escaping links. The restored target also
+refused a second application restore without changing its data or service.
+
+Before simulating loss, the source booted and restored a real Limine snapshot.
+The root marker/database reverted; `/home`, `/var/log` and package-cache markers
+kept their later values. The source was then stopped. A fresh standalone disk
+was installed from the signed ISO. Its backing-chain length was **one**, with
+no dependency on the source VM or its backing files. Recovery used the signed
+encrypted backup, its separately held key and fresh installation media/code.
+The machine ID and SSH host key were individually distinct from the source and
+remained unchanged by application restore. Global account/identity/network/boot
+files were not copied from the source.
+
+The replacement matched the backup database digest and 30 filesystem entries,
+accepted a new durable write and cold-booted with the same resulting data.
+Boot integrity, package database, channel trust and required server/snapshot
+services remained healthy at 176 packages. The 26 later acknowledgments were
+intentionally outside the backup cut; this is not a zero-RPO claim.
+
+The full upstream VM-free shell suite and **378 Python tests** passed again
+(**3 skips**), plus **59 server checks** (12 edition, 15 migration, 9 boot,
+14 release guards and 9 archive-admission tests). Source acceptance revision:
+`3c0eb21d41fab1661a5f833baf91241579e1590d`. The prior signed ISO and baseline hashes remained
+unchanged. New disk compression was verified byte-for-byte virtually before
+replacing only this round's stopped source representation. Existing disks and
+release generations were preserved; host snapshots remained disabled.
+
+Signed sanitized acceptance and evidence are under
+`release/server-operations-2026.10.31/`. Actual backup ciphertext, its key,
+credential media, raw SSH and serial/password transcripts remain private and
+are excluded from the distributable evidence.
+
+The backup was **external to the guest on the same VM host**. It does not
+establish an independent offsite failure domain or host-loss recovery. This is
+application/configuration/user-data recovery onto a fresh OS, not a whole-disk
+image restoration. All six planned development milestones now have measured
+functional evidence; multiweek workload use, independent offsite recovery,
+physical hardware, public IPv6 and Secure Boot still need deployment evidence.

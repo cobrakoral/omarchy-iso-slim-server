@@ -414,6 +414,20 @@ altering the desktop recipe. Its source package is Omarchy
 the corresponding GPL source is
 [Zesko/limine-snapper-sync tag 1.32.1](https://gitlab.com/Zesko/limine-snapper-sync/-/tree/1.32.1).
 
+## Operational workload and application recovery
+
+The measured operational rehearsal runs a short durable HTTP/SQLite workload,
+forces a process crash, verifies a consistent online backup, and restores it
+onto a newly installed standalone server. It also demonstrates actual root
+snapshot boundaries and checks data, ownership, modes, ACLs, xattrs and links.
+The backup is encrypted/signed; corrupt ciphertext, missing keys and unsafe
+archive paths are refused before application recovery. The sample service is
+only a disposable acceptance fixture and adds nothing to the default ISO.
+
+See [the operational recovery procedure and limits](OPERATIONS.server.md).
+Backups used in the rehearsal live outside the guest on its VM host; independent
+offsite recovery, multiweek workloads and physical deployment remain unverified.
+
 ## Optional cloud-init
 
 All cloud-init dependencies are bundled in the ISO, but packages used only
