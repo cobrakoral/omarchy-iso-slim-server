@@ -64,6 +64,11 @@ def main():
     parser.add_argument("iso", type=Path)
     parser.add_argument("--seconds", type=int, default=300)
     parser.add_argument("--port", type=int, default=2462)
+    parser.add_argument(
+        "--resume-work",
+        type=Path,
+        help="Reuse a verified completed workload after an interrupted backup rehearsal",
+    )
     args = parser.parse_args()
     base, iso = args.base.resolve(), args.iso.resolve()
     if (
@@ -81,32 +86,56 @@ def main():
     source_revision = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
     ).strip()
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    directory = ROOT / "test-runs/server" / (stamp + "-operational-source")
-    directory.mkdir(mode=0o700)
-    shutil.copy2(base / "key", directory / "key")
-    run(
-        "qemu-img",
-        "create",
-        "-f",
-        "qcow2",
-        "-F",
-        "qcow2",
-        "-b",
-        str(base / "system.qcow2"),
-        str(directory / "system.qcow2"),
-    )
-    work = ROOT / ".server-work/round6" / stamp
-    share = work / "source-share"
-    share.mkdir(parents=True, mode=0o700)
-    for name in ("operational_guest.py", "operational_workload.py"):
-        shutil.copy2(ROOT / "test/server" / name, share / name)
+    if args.resume_work:
+        work = args.resume_work.resolve()
+        if (
+            not work.is_relative_to(ROOT / ".server-work/round6")
+            or (work / "operational-pass.json").exists()
+        ):
+            raise ValueError("Resume an unqualified private operational work directory")
+        stamp = work.name
+        directory = ROOT / "test-runs/server" / (stamp + "-operational-source")
+        if (
+            not (work / "soak.json").is_file()
+            or not (directory / "system.qcow2").is_file()
+        ):
+            raise ValueError("No completed workload exists to resume")
+        share = work / "source-share"
+        if sha(share / "operational_workload.py") != sha(
+            ROOT / "test/server/operational_workload.py"
+        ):
+            raise ValueError("Workload code changed; completed load cannot be reused")
+        shutil.copy2(
+            ROOT / "test/server/operational_guest.py", share / "operational_guest.py"
+        )
+    else:
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        directory = ROOT / "test-runs/server" / (stamp + "-operational-source")
+        directory.mkdir(mode=0o700)
+        shutil.copy2(base / "key", directory / "key")
+        run(
+            "qemu-img",
+            "create",
+            "-f",
+            "qcow2",
+            "-F",
+            "qcow2",
+            "-b",
+            str(base / "system.qcow2"),
+            str(directory / "system.qcow2"),
+        )
+        work = ROOT / ".server-work/round6" / stamp
+        share = work / "source-share"
+        share.mkdir(parents=True, mode=0o700)
+        for name in ("operational_guest.py", "operational_workload.py"):
+            shutil.copy2(ROOT / "test/server" / name, share / name)
     keydir = work / "keys"
-    keydir.mkdir(mode=0o700)
+    keydir.mkdir(mode=0o700, exist_ok=True)
     key = keydir / "backup.passphrase"
-    key.write_text(secrets.token_urlsafe(48) + "\n")
-    key.chmod(0o600)
-    backups = work / "external-backup"
+    if not key.exists():
+        key.write_text(secrets.token_urlsafe(48) + "\n")
+        key.chmod(0o600)
+    backups = work / ("external-backup-" + str(time.time_ns()))
     backups.mkdir(mode=0o700)
     results = {}
     vm = None
@@ -134,6 +163,13 @@ def main():
             )
         )
         assert value["passed"]
+        if (work / (name + ".json")).exists():
+            history = work / "phase-history"
+            history.mkdir(exist_ok=True)
+            shutil.copy2(
+                work / (name + ".json"),
+                history / (name + "-" + str(time.time_ns()) + ".json"),
+            )
         (work / (name + ".json")).write_text(json.dumps(value, indent=2) + "\n")
         results[name] = value
         return value
@@ -145,12 +181,35 @@ def main():
         )
         before = health(vm)
         assert before["packages"] == 176
-        phase("install")
-        phase("soak", "--seconds " + str(args.seconds))
-        soaked = results["soak"]["database"]
-        vm.stop()
-        vm = boot(directory, share)
-        assert phase("check")["database"] == soaked
+        if args.resume_work:
+            results["soak"] = json.loads((work / "soak.json").read_text())
+            assert (
+                results["soak"]["passed"]
+                and results["soak"]["elapsed_seconds"] >= args.seconds
+            )
+            # Only rows committed by the measured load are compared. An interrupted
+            # online-backup writer may have added independently named later rows.
+            proof = vm.sudo(
+                "python3 - <<'LOAD'\nimport sqlite3,json,hashlib\nc=sqlite3.connect('/var/lib/server-acceptance/database.sqlite3')\nr=c.execute(\"select token,payload from records where token like 'worker-%' order by token\").fetchall()\nprint(json.dumps({'records':len(r),'sha256':hashlib.sha256(json.dumps(r,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()}))\nLOAD"
+            )
+            assert (
+                json.loads(proof) == results["soak"]["database"]
+            ), "Previously acknowledged workload data changed"
+            assert vm.sudo("sha256sum /opt/server-acceptance/app.py").split()[0] == sha(
+                share / "operational_workload.py"
+            )
+            results["resumed_workload"] = {
+                "passed": True,
+                "verified_record_digest": json.loads(proof),
+                "workload_code_sha256": sha(share / "operational_workload.py"),
+            }
+        else:
+            phase("install")
+            phase("soak", "--seconds " + str(args.seconds))
+            soaked = results["soak"]["database"]
+            vm.stop()
+            vm = boot(directory, share)
+            assert phase("check")["database"] == soaked
         backup_started = time.monotonic()
         backup = phase("backup")
         plain = backups / "application.tar"
@@ -374,6 +433,9 @@ def main():
         record = {
             "passed": True,
             "source_revision": source_revision,
+            "resumed_workload": bool(args.resume_work),
+            "soak_receipt_sha256": sha(work / "soak.json"),
+            "workload_code_sha256": sha(share / "operational_workload.py"),
             "iso": str(iso),
             "iso_sha256": iso_hash,
             "source_base": str(base),

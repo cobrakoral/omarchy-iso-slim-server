@@ -90,12 +90,16 @@ def process():
     }
 
 
-def manifest(root):
+def manifest(root, skip_database=False):
     nodes, inodes = {}, {}
     for scope in SCOPES:
         base = root / scope
         paths = [base, *sorted(base.rglob("*"))] if base.is_dir() else [base]
         for path in paths:
+            if skip_database and str(path.relative_to(root)).startswith(
+                "var/lib/server-acceptance/database.sqlite3"
+            ):
+                continue
             info = path.lstat()
             name = str(path.relative_to(root))
             entry = {
@@ -347,7 +351,12 @@ def backup(args):
     thread.start()
     try:
         assert started.wait(10)
-        run("cp", "-a", "--parents", *SCOPES, str(staging))
+        static = ["/" + item for item in SCOPES if item != "var/lib/server-acceptance"]
+        static.append("/var/lib/server-acceptance/documents")
+        run("cp", "-a", "--parents", *static, str(staging))
+        assert manifest(Path("/"), skip_database=True) == manifest(
+            staging, skip_database=True
+        ), "Static source metadata did not survive backup copy"
         for p in (staging / "var/lib/server-acceptance").glob("database.sqlite3*"):
             p.unlink()
         destination = staging / str(DB).lstrip("/")
@@ -371,6 +380,7 @@ def backup(args):
         "service_account": {"name": USER, "uid": account.pw_uid, "gid": account.pw_gid},
         "admin_uid": admin.pw_uid,
         "online_writes": len(writes),
+        "static_source_metadata_verified": True,
         "health_during_backup": probe,
     }
     (staging / "MANIFEST.json").write_text(json.dumps(metadata, indent=2) + "\n")
