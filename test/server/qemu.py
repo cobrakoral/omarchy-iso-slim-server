@@ -2,6 +2,7 @@
 """Real offline installation acceptance. Artifacts remain in test-runs/server/."""
 
 import argparse
+import hashlib
 import fcntl
 import importlib.util
 import json
@@ -236,12 +237,23 @@ def main():
     parser.add_argument("--encrypt", action="store_true")
     parser.add_argument("--port", type=int, default=2422)
     opts = parser.parse_args()
+    with opts.iso.open("rb") as image:
+        iso_hash = hashlib.file_digest(image, "sha256").hexdigest()
+    source_revision = output("git", "-C", str(ROOT), "rev-parse", "HEAD").strip()
+    source_dirty = bool(output("git", "-C", str(ROOT), "status", "--porcelain"))
+    harness_hash = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     case = ("cloud" if opts.cloud_init else "base") + ("-luks" if opts.encrypt else "")
     case += ("-bios" if opts.bios else "") + ("-static" if opts.static else "")
     if opts.reuse:
         directory = opts.reuse.resolve()
         if not directory.is_relative_to(ROOT / "test-runs/server"):
             raise ValueError("Only this project's disposable test disks may be reused")
+        previous = json.loads((directory / "acceptance-pass.json").read_text())
+        if (
+            Path(previous["iso"]).resolve() != opts.iso.resolve()
+            or previous.get("iso_sha256", iso_hash) != iso_hash
+        ):
+            raise ValueError("Reuse must identify the original installation ISO")
         disk = directory / "system.qcow2"
         cidata = directory / "installer.iso"
     else:
@@ -411,10 +423,27 @@ cat /boot/limine.conf
                 "! pacman -Q cloud-init; test ! -e /etc/cloud/cloud.cfg.d/90-omarchy-server.cfg"
             )
         print("SERVICES_NETWORK_AUTH_PACKAGES_SNAPSHOTS_PASS", flush=True)
+        installed_packages = dict(
+            line.split(maxsplit=1) for line in vm.sudo("pacman -Q").splitlines()
+        )
+        with opts.iso.open("rb") as image:
+            if hashlib.file_digest(image, "sha256").hexdigest() != iso_hash:
+                raise ValueError("ISO changed during acceptance")
+        if (
+            hashlib.sha256(Path(__file__).read_bytes()).hexdigest() != harness_hash
+            or output("git", "-C", str(ROOT), "rev-parse", "HEAD").strip()
+            != source_revision
+        ):
+            raise ValueError("Acceptance source changed during the run")
         (directory / "acceptance-pass.json").write_text(
             json.dumps(
                 {
                     "case": case,
+                    "iso_sha256": iso_hash,
+                    "source_revision": source_revision,
+                    "source_dirty": source_dirty,
+                    "harness_sha256": harness_hash,
+                    "packages": installed_packages,
                     "disk": str(disk),
                     "iso": str(opts.iso.resolve()),
                     "checks": "boot, console password, key SSH, networkd, resolved, no egress, package exclusions, snapshot creation and boot entries, cloud-init selection",
