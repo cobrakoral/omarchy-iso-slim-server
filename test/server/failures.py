@@ -16,7 +16,15 @@ import threading
 import time
 from qemu import PASSWORD, ROOT, VM, run
 
-CASES = ("post-hook", "pre-hook", "full-root", "full-esp", "download", "power-cut")
+CASES = (
+    "post-hook",
+    "pre-hook",
+    "full-root",
+    "full-esp",
+    "download",
+    "stale-lock",
+    "power-cut",
+)
 
 
 def space_guard():
@@ -366,6 +374,15 @@ test "$(df -B1 --output=avail /boot | tail -n1)" -lt 134217728
                     'test "$(cat /usr/share/omarchy-server-fault-fixture/version)" = 1'
                 )
                 server.abort_download = False
+            elif case == "stale-lock":
+                vm.sudo("! pgrep -x pacman; touch /var/lib/pacman/db.lck")
+                text = attempt(vm, 1, "Pacman database is locked")
+                assert (
+                    latest_snapshot(vm) == before
+                ), "Locked transaction created a snapshot"
+                vm.sudo(
+                    'test "$(cat /usr/share/omarchy-server-fault-fixture/version)" = 1; ! pgrep -x pacman; rm /var/lib/pacman/db.lck'
+                )
             elif case == "power-cut":
                 hook(
                     vm,
@@ -392,15 +409,24 @@ test "$(df -B1 --output=avail /boot | tail -n1)" -lt 134217728
                 vm.child.expect(__import__("pexpect").EOF, timeout=20)
                 vm.stop()
                 vm = boot()
-                vm.sudo("""
-test -f /var/lib/omarchy-server/update-state
-test -f /var/lib/pacman/db.lck
+                text += vm.sudo("""
+grep '^pacman ' /var/lib/omarchy-server/update-state
+! grep -q 'Update complete' /var/log/fault-attempt.log
+test "$(cat /usr/share/omarchy-server-fault-fixture/version)" = 2
 ! pgrep -x pacman
+if test -f /var/lib/pacman/db.lck; then echo LOCK_RETAINED; else echo LOCK_ABSENT; fi
 """)
-                text += attempt(vm, 1, "Pacman database is locked")
+                # Lock persistence is not guaranteed across a crash/reboot.
+                # The separate stale-lock case always verifies refusal. A real
+                # leftover lock here must also be refused before manual repair.
+                if (
+                    vm.ssh("test -f /var/lib/pacman/db.lck", check=False).returncode
+                    == 0
+                ):
+                    text += attempt(vm, 1, "Pacman database is locked")
                 vm.sudo("""
 ! pgrep -x pacman
-rm /var/lib/pacman/db.lck /etc/pacman.d/hooks/99-fault.hook
+rm -f /var/lib/pacman/db.lck /etc/pacman.d/hooks/99-fault.hook
 mkdir -p /run/fault-packages
 mount -t 9p -o trans=virtio,version=9p2000.L,ro packages /run/fault-packages
 """)
@@ -413,6 +439,8 @@ mount -t 9p -o trans=virtio,version=9p2000.L,ro packages /run/fault-packages
                 vm.sudo("pacman -S --noconfirm omarchy-server-fault-fixture")
             (directory / "failure-observed.txt").write_text(text)
             repaired = attempt(vm, 0, "Update complete")
+            if case == "power-cut":
+                assert "Previous update did not complete:" in repaired
             vm.sudo("""
 test "$(cat /usr/share/omarchy-server-fault-fixture/version)" = 2
 test ! -e /var/lib/omarchy-server/update-state
