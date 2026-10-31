@@ -10,6 +10,7 @@ import shutil
 import socket
 import subprocess as sp
 import time
+import tempfile
 import pexpect
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -68,8 +69,11 @@ class VM:
         vars = directory / "OVMF_VARS.fd"
         if not vars.exists():
             shutil.copy("/usr/share/edk2/x64/OVMF_VARS.4m.fd", vars)
-        self.qmp = directory / "qmp.sock"
-        self.qmp.unlink(missing_ok=True)
+        # UNIX socket paths are limited to 107 bytes. Evidence directories can
+        # be longer (especially BIOS/encrypted fault cases), so keep the socket
+        # in a short private directory without shortening the evidence path.
+        self.control = tempfile.TemporaryDirectory(prefix="omarchy-qmp-")
+        self.qmp = Path(self.control.name) / "qmp.sock"
         args = [
             "-enable-kvm",
             "-cpu",
@@ -136,8 +140,11 @@ class VM:
             except pexpect.TIMEOUT:
                 qmp(self.qmp, "quit")
                 self.child.expect(pexpect.EOF, timeout=10)
+        else:
+            self.child.expect(pexpect.EOF, timeout=5)
         self.child.close()
         self.log.close()
+        self.control.cleanup()
 
     def ssh(self, command, check=True):
         result = sp.run(
@@ -181,7 +188,10 @@ class VM:
             if self.ssh("true", check=False).returncode == 0:
                 return
             if not self.child.isalive():
-                raise RuntimeError("Guest exited before SSH")
+                self.child.expect(pexpect.EOF, timeout=5)
+                raise RuntimeError(
+                    "Guest exited before SSH: " + self.child.before[-2000:]
+                )
             time.sleep(2)
         raise RuntimeError("SSH did not become available")
 
