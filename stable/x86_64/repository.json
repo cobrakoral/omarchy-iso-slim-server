@@ -1,0 +1,73 @@
+{
+  "unofficial": true,
+  "source_revision": "9ad55285912572d2f07f250a63ed8c9699a48b7a",
+  "source_dirty": false,
+  "maintainer_fingerprint": "7C5C6FEB40A5B493007FAA3650B1EB533F640140",
+  "source_files": {
+    "builder/server/keyring/PKGBUILD": "413a35e93a91f411f6fc210ef45f9070ed6e80f0f9f57ce62fe820314b68c72c",
+    "builder/server/keyring/keyring.install": "938cfe1cb6bec71fed9d23772f1063c1284e661045b277a7be065caf21942998",
+    "builder/server/keyring/omarchy-server-revoked": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "builder/server/keyring/omarchy-server-trusted": "66c6029d98c5cd0082c448bf67ec675cb86f1c7e71f1919b8e36ef7a8a20c986",
+    "builder/server/keyring/omarchy-server.asc": "31db8c324fa9e5579227bfec3b70899183850a8fa2a220f032a98a66ebc36e19",
+    "builder/server/keyring/omarchy-server.gpg": "d2e04a83bf9607232ce83cd163634f6a63f5ca41b2b9aa70a39fa1efe5c5f240",
+    "builder/server/limine-snapper-sync/PKGBUILD": "621a892a74ce20f75e4c5d9422b1991c6b1fd9b497abc004703dd264fc271d58",
+    "builder/server/runtime/95-omarchy-server-migrate.hook": "d20cf17c3b7d8efe5d708b032ae3165f211d9d52e0462f055d2fb4ed41d4b98f",
+    "builder/server/runtime/PKGBUILD": "351f130b0726cb5ee13f8985149ee92f5902a5d76854725ea2891737217375f7",
+    "builder/server/runtime/bin/omarchy-server-boot-check": "d79b9818a032e9c7c8b84db2e8337db347e212240f598d73eae09d4144d541ad",
+    "builder/server/runtime/bin/omarchy-server-migrate": "52912694a3f4c92ae502e59a5c4ccbd2c172c58ccfb0e4a9b93df362213093ee",
+    "builder/server/runtime/bin/omarchy-server-repository": "8ccb1107ee19cd839f1e80de43ce0f86cd016bfa63c718fa039b6a160b2d0f95",
+    "builder/server/runtime/bin/omarchy-update": "9dcd0f55352d0ffe89fccb530abc952f37337035e8c7cc09a6a67a76bf6d1094",
+    "builder/server/runtime/bin/omarchy-version": "1e62910f810cfd60360cca808e4278a97d09c6b95262ecc2f7d7778d7c138259",
+    "builder/server/runtime/limine.conf": "f82ca9da406cf3775542427094eff839daa77f4e950b1c8610360bead2be97c4",
+    "builder/server/runtime/migrations/0001-package-repository.sh": "185a000db4668325408f66f42ec4f1c5887ec75be663025606179c345d116a81",
+    "builder/server/runtime/migrations/manifest.json": "a20889c5835fac9d351e7d6521862fa02ac7c692940804467cfca16d89447f6e",
+    "builder/server/runtime/mkinitcpio.conf": "61837bd05865c5bbf46b705e48d6f771229b95186593015563a1dcc861a14ce0",
+    "builder/server/runtime/repository.conf": "1f3cfe921c6dc31a633bf9a4f3071d5057f9cc0b3c798ec41643f7cf228de333",
+    "builder/server/runtime/upstream/LICENSE": "717ba1949502290f8e47688ae2e323acd06c8ca47aec9f7596b15f678c1af4a2",
+    "builder/server/runtime/upstream/REVISION": "5b4877dd6bdc334c6176bf0ca319aa657bc3e6c28c3356f005b210ef71104772",
+    "builder/server/runtime/upstream/bin/omarchy-cmd-missing": "791f70dda4f3b27da47cdfb5d684dadaa1b79b374ec4523ec1316119a6d71814",
+    "builder/server/runtime/upstream/bin/omarchy-snapshot": "a154bb5fd33ad3288be4783557887a7207176e9d05bc72585c30e27fea8e3e7b",
+    "builder/server/runtime/upstream/default/limine/default.conf": "a70caddc25902cecc80751882a9aa391c0f33f177598680e40aaf6ab853be866",
+    "builder/server/runtime/upstream/default/limine/limine.conf": "cb4113df8b9dd7bed70bdd7e3c57f2a67cde95c5ff7434ee4c6700355da13569",
+    "builder/server/runtime/upstream/default/snapper/root": "151d960499442fbbc751abe12cec5fb07521cc39bbc616d1ed1eda75f8edad88",
+    "builder/server/runtime/upstream/etc/limine-entry-tool.d/omarchy-uki.conf": "19b45bf995f5f62a6defdfa9046c3f4726042b8e1bb65adf4b8a3ec10a026b9a",
+    "builder/server/runtime/upstream/install/config/snapper.sh": "7ae6e95f6db188f76a9bbb2546e4b6d73e0788960c35cde1512428504d7bb762",
+    "builder/server/runtime-upstream.lock.json": "db7930fddc9ac209de18bb6596e87f4f92e104e17beaf4c220fc63104510cbe3"
+  },
+  "official_snapshot_package": {
+    "file": "limine-snapper-sync-1.32.1-2-x86_64.pkg.tar.zst",
+    "sha256": "95e239bd4c3297cc66c67f64ff66ef5df72ab5105995a2b11caf0f4a896e8465"
+  },
+  "official_runtime": {
+    "revision": "Repository: https://github.com/omacom/omarchy\nRevision: 84782475aeb885c8d05f9e85b6ad0f1a0add60e5 (quattro, 2026-10-29)\nFiles in this directory are copied verbatim from this revision, except this\nprovenance record. Preserve the MIT license when refreshing the copies.",
+    "files": {
+      "LICENSE": "717ba1949502290f8e47688ae2e323acd06c8ca47aec9f7596b15f678c1af4a2",
+      "REVISION": "5b4877dd6bdc334c6176bf0ca319aa657bc3e6c28c3356f005b210ef71104772",
+      "bin/omarchy-cmd-missing": "791f70dda4f3b27da47cdfb5d684dadaa1b79b374ec4523ec1316119a6d71814",
+      "bin/omarchy-snapshot": "a154bb5fd33ad3288be4783557887a7207176e9d05bc72585c30e27fea8e3e7b",
+      "default/limine/default.conf": "a70caddc25902cecc80751882a9aa391c0f33f177598680e40aaf6ab853be866",
+      "default/limine/limine.conf": "cb4113df8b9dd7bed70bdd7e3c57f2a67cde95c5ff7434ee4c6700355da13569",
+      "default/snapper/root": "151d960499442fbbc751abe12cec5fb07521cc39bbc616d1ed1eda75f8edad88",
+      "etc/limine-entry-tool.d/omarchy-uki.conf": "19b45bf995f5f62a6defdfa9046c3f4726042b8e1bb65adf4b8a3ec10a026b9a",
+      "install/config/snapper.sh": "7ae6e95f6db188f76a9bbb2546e4b6d73e0788960c35cde1512428504d7bb762"
+    }
+  },
+  "files": {
+    "enable-repository": "8ccb1107ee19cd839f1e80de43ce0f86cd016bfa63c718fa039b6a160b2d0f95",
+    "limine-snapper-sync-server-1.32.1-3-x86_64.pkg.tar.zst": "d987f2a58fd8a54322087a4a8c1fc6200c85d874cc689383d849ad5fda5dab08",
+    "limine-snapper-sync-server-1.32.1-3-x86_64.pkg.tar.zst.sig": "9ffeebd1d8cad7d10a480b8af6e00b90f36715c215b70ffc5ef71c606f5e9c1b",
+    "omarchy-server-0.2.0-1-any.pkg.tar.zst": "e3fe156b6a28b72bbdec340c15128144731422909209e0fa6dad8dea069d4fbf",
+    "omarchy-server-0.2.0-1-any.pkg.tar.zst.sig": "e9d8a02a6b66fd61b0f9e23dfa7ffdedda828f93988dda493c1b8cf75eef9555",
+    "omarchy-server-keyring-20261031-1-any.pkg.tar.zst": "3973828ae1d2a4b6e517c810ace403ee3b9aed35d4886f7588af690cf823248e",
+    "omarchy-server-keyring-20261031-1-any.pkg.tar.zst.sig": "8d2194614c6d797945b16506dcf179b77890e1da0818d765c7fe5cfcc40ffa01",
+    "omarchy-server.asc": "31db8c324fa9e5579227bfec3b70899183850a8fa2a220f032a98a66ebc36e19",
+    "omarchy-server.db": "ee42a9e302398d5ed72eb2e7d9aa443fff823572890164530c255764745cc89d",
+    "omarchy-server.db.sig": "a4f78b7da4b48a2d77e8b5b7653d82e205d9fc41003d8ef42a300e624579ac5f",
+    "omarchy-server.db.tar.gz": "ee42a9e302398d5ed72eb2e7d9aa443fff823572890164530c255764745cc89d",
+    "omarchy-server.db.tar.gz.sig": "a4f78b7da4b48a2d77e8b5b7653d82e205d9fc41003d8ef42a300e624579ac5f",
+    "omarchy-server.files": "bf1c6bc5da7bc22b7e30c304d473fc44298f7d3736f5bc788f34491e0df0f601",
+    "omarchy-server.files.sig": "e771844e040cb386ee55ac3bb5a38eb1f8e8d925c17adf0ff4d5052c80ae3c08",
+    "omarchy-server.files.tar.gz": "bf1c6bc5da7bc22b7e30c304d473fc44298f7d3736f5bc788f34491e0df0f601",
+    "omarchy-server.files.tar.gz.sig": "e771844e040cb386ee55ac3bb5a38eb1f8e8d925c17adf0ff4d5052c80ae3c08"
+  }
+}
