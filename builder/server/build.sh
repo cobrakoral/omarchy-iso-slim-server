@@ -124,6 +124,19 @@ for f in closure.read_text().splitlines():
     if installed.get(name)!=version: print(f)
 PY
 (cd "$mirror"; { cat "$work/airootfs/usr/share/omarchy-iso/offline-mirror.shipped"; echo offline.db.tar.gz; } | xargs -d '\n' sha256sum) > "$work/airootfs/usr/share/omarchy-iso/offline-mirror.sha256"
+# Machine-readable package closures let release acceptance compare exact versions.
+python - /server-cache/image-localdb "$mirror" "$work/airootfs/usr/share/omarchy-iso/offline-mirror.shipped" <<'META' > /out/server-image-packages.json
+import json, pathlib, subprocess, sys
+base = {}
+for desc in (pathlib.Path(sys.argv[1]) / 'local').glob('*/desc'):
+    fields = desc.read_text().splitlines()
+    base[fields[fields.index('%NAME%')+1]] = fields[fields.index('%VERSION%')+1]
+delta = {}
+for filename in pathlib.Path(sys.argv[3]).read_text().splitlines():
+    name, version = subprocess.check_output(['pacman', '-Qp', str(pathlib.Path(sys.argv[2]) / filename)], text=True).split()
+    delta[name] = version
+print(json.dumps({'base': dict(sorted(base.items())), 'cloud_delta': dict(sorted(delta.items()))}, indent=2))
+META
 # Copying the full mirror here would duplicate disk use; mkarchiso sees it
 # through the profile symlink, then customize_airootfs prunes its own copy.
 mkdir -p "$work/airootfs/var/cache/omarchy/mirror"

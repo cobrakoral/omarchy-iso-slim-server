@@ -3,23 +3,23 @@
 set -euo pipefail
 root=$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)
 cd "$root"
+empty_cache=()
 for option in "$@"; do
   case $option in
+    --empty-cache) empty_cache=(--empty-cache) ;;
     --no-boot-offer|--keep-pkg-cache) ;; # Never purge the host package cache.
     *) echo "Unsupported server build option: $option" >&2; exit 2 ;;
   esac
 done
 git submodule update --init --recursive --jobs=2
-build_id=$(date +%Y%m%d-%H%M%S)
+build_id=$(date +%Y%m%d-%H%M%S-%N)
 out=${OMARCHY_SERVER_RELEASE_DIR:-"$root/release/server-$build_id"}
 cache=${OMARCHY_SERVER_CACHE_DIR:-"$root/.server-work/build-$build_id"}
-mkdir -p "$out" "$cache"
-out=$(realpath "$out"); cache=$(realpath "$cache")
-# Seed this generation with hard links; pruning cannot delete earlier archives.
-if [[ ! -d $cache/mirror && -d $root/.server-work/cache/mirror ]]; then
-  cp -al "$root/.server-work/cache/mirror" "$cache/mirror"
-fi
 image=${OMARCHY_BUILD_CONTAINER:-ghcr.io/archlinux/archlinux@sha256:7cb90fa1418aa3bc99c06ad5468988c56d164a3c0231ea6f2662f32aaad9e146}
+epoch=${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct)}
+python3 builder/server/build-inputs.py --output "$out" --cache "$cache" \
+  --image "$image" --epoch "$epoch" "${empty_cache[@]}"
+out=$(realpath "$out"); cache=$(realpath "$cache")
 sudo docker image inspect "$image" >/dev/null 2>&1 || sudo docker pull "$image"
 sudo docker image inspect "$image" --format '{{json .RepoDigests}}' | tee "$out/server-container.json" >/dev/null
 # Sign outside the container; only public keys and signed artifacts are mounted.
@@ -37,18 +37,20 @@ repository=$(realpath "$repository")
 python3 builder/server/package-repository.py --verify "$repository"
 git rev-parse HEAD > "$out/server-source-revision.txt"
 git status --porcelain > "$out/server-source-status.txt"
-git ls-files -s builder configs bin > "$out/server-source-tree.git"
+git ls-files -s builder configs bin test > "$out/server-source-tree.git"
 while IFS= read -r -d '' file; do
   [[ -L $file ]] || sha256sum "$file"
-done < <(git ls-files -z builder configs bin) > "$out/server-source-files.sha256"
+done < <(git ls-files -z builder configs bin test) > "$out/server-source-files.sha256"
 printf 'Server release: %s\nServer build cache: %s\n' "$out" "$cache"
 sudo docker run --rm --privileged \
   -e OMARCHY_SERVER_ARCHISO_COMMIT="$(git -C archiso rev-parse HEAD)" \
   -e OMARCHY_SERVER_SOURCE_COMMIT="$(git rev-parse HEAD)" \
   -e OMARCHY_EDITION=server -e OMARCHY_ARCH=x86_64 \
-  -e SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct)}" \
+  -e SOURCE_DATE_EPOCH="$epoch" \
   -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
   -v "$root/builder:/builder:ro" -v "$root/configs:/configs:ro" \
   -v "$root/archiso:/archiso:ro" -v "$cache:/server-cache" \
   -v "$repository:/server-repository:ro" -v "$out:/out" \
   "$image" bash /builder/server/build.sh
+
+python3 builder/server/build-inputs.py --output "$out" --verify
