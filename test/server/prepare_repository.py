@@ -116,6 +116,12 @@ def main():
             "--detach-sign",
             str(repo / "omarchy-server.db"),
         )
+        with (output / "untrusted-test-key.asc").open("wb") as public:
+            subprocess.run(
+                ["gpg", "--homedir", str(home), "--armor", "--export"],
+                check=True,
+                stdout=public,
+            )
         run("gpgconf", "--homedir", str(home), "--kill", "all")
     build = output / "migration-fixture"
     shutil.copytree(

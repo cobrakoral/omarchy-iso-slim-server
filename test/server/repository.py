@@ -169,9 +169,14 @@ cp /etc/pacman.conf /run/pacman.before-bootstrap
                 "unsigned-package",
                 "untrusted-database",
             ):
+                if case == "untrusted-database":
+                    vm.sudo("pacman-key --add /run/server-repo/untrusted-test-key.asc")
                 enable(vm, case)
                 rejected = attempt(
-                    vm, "pacman -Syu --noconfirm omarchy-server", False, "signature"
+                    vm,
+                    "pacman -Syu --noconfirm omarchy-server",
+                    False,
+                    ".pkg.tar.zst.sig" if case == "unsigned-package" else "signature",
                 )
                 vm.sudo("""
 pacman -Q omarchy-server | grep -F '0.1.0-1'
