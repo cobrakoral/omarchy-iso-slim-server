@@ -167,3 +167,99 @@ remain outstanding; those packages stayed at 1.40.0-2 and 1.32.1-2 respectively.
 Physical hardware, Secure Boot and the remaining operational roadmap are still
 outside this round. Only about 878 MiB free remained after acceptance; a fresh
 ISO build requires additional workspace (documented baseline: 12 GiB free).
+
+
+## Failure-recovery acceptance — 2026-10-31
+
+This round delivers signed **omarchy-server 0.1.2-1** and build-source changes.
+The original ISO and its signatures/checksums remain unchanged. Runtime commit:
+`e95a47d`; fault-harness commits: `1826d4a`, `27ae243`, `01db234`. Per-run
+receipts identify the exact source hashes and tested package SHA-256.
+
+Package size: **19,196 bytes**. SHA-256:
+`5c41cd8a519b5056e07ef2eb6e45cd34d766996629d87939c363310951f63dc8`.
+Its packaged updater matches the source file byte-for-byte. The unofficial
+maintainer detached signature verifies with the fingerprint listed above.
+
+The updater now retains private transaction transcripts outside root snapshots,
+uses atomic phase markers, checks minimum root/ESP working space, refuses a
+stale Pacman lock, and detects Pacman error output even when its exit status is
+zero. Failed hooks require manual repair and explicit acknowledgment before
+another upgrade; a no-op retry cannot silently clear that failure.
+
+Fault injections use fresh disposable overlays of accepted installations,
+read-only signed package shares and blocked external guest networking. A fixture
+package changes from version 1 to 2; it is not part of the ISO's package set.
+Each passing case includes an actual corrected update and cold reboot, SSH,
+networkd/resolved, snapshot services, kernel/boot verification and Pacman
+database/fixture-file integrity checks.
+
+| Fault | Required observed behavior and recovery |
+|---|---|
+| Post-transaction hook exits nonzero while Pacman exits zero | Updater returns failure, retains transcript, reports possible applied changes; default UEFI boots the actual pre-update snapshot, restores version 1, then upgrades successfully. BIOS and LUKS also verify refusal until explicit hook repair/reinstallation acknowledgment. |
+| Pre-transaction hook aborts | Version 1 remains installed; updater fails without claiming success; removing the fault allows a successful upgrade/reboot. |
+| Root ENOSPC | Btrfs extent reservations reach ENOSPC; updater refuses before snapshot/package changes; releasing the reservation allows upgrade/reboot. |
+| ESP ENOSPC | Zero writes fill FAT32 until ENOSPC; updater refuses before snapshot/package changes; removing the filler allows upgrade/reboot. |
+| Interrupted package download | HTTP closes after a partial payload; no package changes or success claim; subsequent HTTP byte-range resume, signature verification, upgrade and reboot succeed. |
+| Stale Pacman lock | Updater refuses without creating a snapshot or changing packages; does not remove the lock automatically; confirmed manual lock removal allows upgrade/reboot. |
+| Abrupt shutdown during a post-transaction hook | SIGKILL terminates QEMU after the fixture upgrade reaches a deliberately paused hook. The guest reboots, the incomplete phase marker and transcript survive, no success is claimed, and repair/reinstallation plus retry complete successfully. Repeated with LUKS unlock. |
+
+The signed 0.1.2 package also passed the real system upgrade and restore test
+again: kernel **7.2.8-9 -> 7.2.8-10 -> 7.2.8-9**, systemd
+**262 -> 262.1 -> 262**, and Limine **12.9.3 -> 12.9.4 -> 12.9.3**.
+All observations included cold boots and matched kernel/modules/boot payloads;
+installed package count remained **175**. The newer kernel is from edge and the
+historical userspace is constructed from signed archived packages; this retains
+the earlier controlled-test limitation.
+
+The power-cut test does not require Pacman's lock file to survive reboot: on
+this baseline it was absent, while the atomic updater marker persisted. The
+separate stale-lock case verifies the lock policy directly. This corrects a
+test assumption rather than dropping the lock-refusal check. Other test-fixture
+corrections added HTTP byte-range support and moved QMP control sockets into
+short private temporary paths to avoid the UNIX socket path-length limit.
+Earlier failed attempts and logs remain available for inspection.
+
+The final matrix passed **10 fault/recovery scenarios**: seven default UEFI
+cases, BIOS post-hook recovery, encrypted UEFI post-hook recovery, and encrypted
+UEFI power-cut recovery. The real system upgrade/rollback passed separately.
+
+Regression checks: **77 passed** (10 server, 9 boot integrity, 58 shared).
+Shell syntax, warning-level shellcheck and Python compilation pass.
+
+The selected receipt list and sanitized evidence bundle are
+`release/server-failure-recovery-acceptance.json` and
+`release/server-failure-recovery-evidence.tar.gz`. Their checksums, this
+validation record and the signed package are covered by
+`release/SERVER-FAILURE-RECOVERY-SHA256SUMS` and its detached signature.
+Private SSH keys, credential media, SSH command logs and interactive restore
+transcripts are excluded from the release bundle; full evidence remains private
+on the development VM.
+
+This round uses accepted replacement baseline disks created on 2026-10-30:
+default `20261030-190040-base`, BIOS `20261030-190713-base-bios`, encrypted
+`20261030-190404-base-luks`, all under `test-runs/server/`. Earlier directory
+lists above describe historical runs; the acceptance JSON records the current
+selected overlay paths. No baseline disk is modified by these overlay tests.
+
+These are controlled fault points, not proof of recovery from every power-loss
+write window, physical disk failure or corrupt filesystem. Physical hardware,
+Secure Boot, new-version hook/snapshot-core transitions and a signed package
+update repository remain outside this round. Host snapshots remain disabled by
+administrator policy; server image and guest snapshot behavior remain enabled.
+A refreshed ISO has not been built in this maintenance round.
+
+Selected current fault-test directories under `test-runs/server/`:
+
+- `20261031-014527-failure-post-hook/`
+- `20261031-014718-failure-pre-hook/`
+- `20261031-014813-failure-full-root/`
+- `20261031-014852-failure-full-esp/`
+- `20261031-014931-failure-download/`
+- `20261031-015007-failure-stale-lock/`
+- `20261031-015042-failure-power-cut/`
+- `20261031-014222-failure-post-hook-bios/`
+- `20261031-014300-failure-post-hook-luks/`
+- `20261031-014723-failure-power-cut-luks/`
+
+Real-package upgrade/restore: `20261031-014412-system-upgrade/`.

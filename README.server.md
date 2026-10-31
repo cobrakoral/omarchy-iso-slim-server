@@ -243,26 +243,93 @@ Boot-check integration also rejects a stale UKI or corrupted BIOS kernel and
 refuses an update with /boot unmounted, then proves another cold boot works.
 
 The baseline ISO contains maintenance package 0.1.0. The stronger boot checker
-is delivered in package **0.1.1** and will be included by subsequent ISO builds;
-installing that signed package in disposable guests is part of these tests.
-The existing ISO is not silently replaced. The signed package and its checksum
-are under `release/omarchy-server-0.1.1-1-any.pkg.tar.zst` and
-`release/SERVER-MAINTENANCE-SHA256SUMS`. After verifying the maintainer fingerprint
-listed above, an existing server can install the package normally:
+was introduced in 0.1.1 and is included in the current **0.1.2** package alongside
+the failure-recovery checks below. Subsequent ISO builds include the current
+recipe; the existing ISO is not silently replaced. The latest signed package
+and checksums are `release/omarchy-server-0.1.2-1-any.pkg.tar.zst` and
+`release/SERVER-FAILURE-RECOVERY-SHA256SUMS`. After verifying the maintainer
+fingerprint listed above, an existing server can install the package normally:
 
 ```sh
-sha256sum --check SERVER-MAINTENANCE-SHA256SUMS
-gpg --verify omarchy-server-0.1.1-1-any.pkg.tar.zst.sig \
-  omarchy-server-0.1.1-1-any.pkg.tar.zst
+sha256sum --check SERVER-FAILURE-RECOVERY-SHA256SUMS
+gpg --verify omarchy-server-0.1.2-1-any.pkg.tar.zst.sig \
+  omarchy-server-0.1.2-1-any.pkg.tar.zst
 sudo pacman-key --add UNOFFICIAL-SIGNING-KEY.asc
 sudo pacman-key --lsign-key 7C5C6FEB40A5B493007FAA3650B1EB533F640140
-sudo pacman -U ./omarchy-server-0.1.1-1-any.pkg.tar.zst
+sudo pacman -U ./omarchy-server-0.1.2-1-any.pkg.tar.zst
 sudo omarchy-server-boot-check
 ```
 
 New-version transitions for
 limine-mkinitcpio-hook and the headless snapshot core remain to be tested when
 suitable additional versions are staged.
+
+## Update failure recovery (maintenance package 0.1.2)
+
+The original ISO still contains 0.1.0. Package 0.1.2 includes the 0.1.1
+boot-integrity checks and adds failure detection; rebuilding the ISO includes
+it automatically. The signed archive is
+`release/omarchy-server-0.1.2-1-any.pkg.tar.zst`, with checksums in
+`SERVER-FAILURE-RECOVERY-SHA256SUMS` and its detached signature. Verify the
+maintainer fingerprint above, then use normal `pacman -U` to install it.
+
+The updater requires a mounted `/boot` and minimum free reserves of **512 MiB
+on root** and **128 MiB on `/boot`** before taking a snapshot. These reserves do
+not guarantee room for an arbitrary upgrade. Pacman's configured `CheckSpace`
+checks remain necessary. A low-space refusal happens before the snapshot or
+package transaction, so free space and retry.
+
+Each transaction retains a private transcript under `/var/log/omarchy-server/`.
+The atomic `/var/lib/omarchy-server/update-state` marker records the active
+phase and transcript. Logs live on the separate `@log` subvolume and survive
+root restoration. Success removes the marker only after the package upgrade,
+boot verification and Limine snapshot synchronization all succeed.
+
+Pacman can exit zero despite a failing post-transaction hook or scriptlet.
+The updater checks the uncoloured C-locale output for `error:` and refuses to
+print success in that case. It preserves a `pacman-hooks` marker and blocks
+another update until the administrator repairs and reruns the failed action
+(or reinstalls the affected packages), then explicitly removes the marker to
+acknowledge the repair. Simply retrying `pacman -Syu` may not rerun a hook when
+its package is already upgraded. Inspect the transcript before choosing the
+repair. Alternatively, boot the known-good snapshot through Limine and use
+`omarchy-snapshot restore` before retrying.
+
+An interrupted download can be retried normally once its source is available.
+After abrupt shutdown, a stale Pacman lock is reported and never removed
+automatically. Confirm no package manager is running before removing
+`/var/lib/pacman/db.lck`; inspect the transcript and package database, repair
+or reinstall affected packages, then retry. Do not reboot a system with failed
+boot verification until its boot artifacts are repaired or a known-good
+snapshot has been restored.
+
+Reproduce the fault matrix using a stopped accepted guest and its retained
+package mirror. Preparation needs the configured GPG signing key and stages
+signed fixture packages without installing anything on the host:
+
+```sh
+python test/server/prepare_failures.py
+python test/server/failures.py test-runs/server/<accepted-base-run> \
+  .server-work/failure-tests/packages
+python test/server/failures.py test-runs/server/<accepted-bios-run> \
+  .server-work/failure-tests/packages --bios --case post-hook
+python test/server/failures.py test-runs/server/<accepted-encrypted-run> \
+  .server-work/failure-tests/packages --encrypt --case power-cut
+```
+
+Cases cover pre/post hook failure, ENOSPC on root and ESP, interrupted/resumed
+HTTP downloads, stale-lock refusal, and a QEMU SIGKILL during a deliberately paused post-transaction
+hook. Package downloads use a host-loopback HTTP server through an SSH reverse
+tunnel; external guest networking stays blocked. Tests retain the failed
+attempt, repair, cold-boot checks and source/package hashes. The post-hook UEFI
+case also boots the actual pre-update snapshot and restores it. These tests
+exercise specific failure points, not every possible power-loss write window.
+
+The harness creates fresh copy-on-write guest disks, uses zero-discard support
+for the ESP fill, reserves Btrfs extents for root ENOSPC, and refuses new runs
+with less than **8 GiB free on the host**. Host snapshot settings are independent
+of the guest image and are never changed by this suite. Existing acceptance
+disks and release artifacts must be preserved.
 
 ## Source pins and upstream tracking
 
