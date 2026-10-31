@@ -60,14 +60,14 @@ grep -iF """
     )
 
 
-def health(vm):
+def health(vm, allow_cloud=False):
     names = vm.sudo("pacman -Qq").split()
     spec = importlib.util.spec_from_file_location(
         "server_packages", ROOT / "builder/server/check-packages.py"
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    module.check(names)
+    module.check([name for name in names if not (allow_cloud and name == "cloud-init")])
     text = vm.sudo("""
 omarchy-server-repository --check
 omarchy-server-migrate
