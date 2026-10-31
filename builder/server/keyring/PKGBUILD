@@ -1,0 +1,16 @@
+pkgname=omarchy-server-keyring
+pkgver=20261031
+pkgrel=1
+pkgdesc='Pinned unofficial Omarchy Slim Server repository trust anchors'
+arch=('any')
+options=('!debug' '!strip')
+license=('MIT')
+url='https://github.com/cobrakoral/omarchy-iso-slim-server'
+depends=('pacman' 'gnupg')
+install=keyring.install
+source=('omarchy-server.gpg' 'omarchy-server-trusted' 'omarchy-server-revoked')
+sha256sums=('d2e04a83bf9607232ce83cd163634f6a63f5ca41b2b9aa70a39fa1efe5c5f240' '66c6029d98c5cd0082c448bf67ec675cb86f1c7e71f1919b8e36ef7a8a20c986' 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')
+package() {
+  install -Dm644 "$srcdir/omarchy-server.gpg" "$pkgdir/usr/share/pacman/keyrings/omarchy-server.gpg"
+  install -m644 "$srcdir/omarchy-server-trusted" "$srcdir/omarchy-server-revoked" "$pkgdir/usr/share/pacman/keyrings/"
+}

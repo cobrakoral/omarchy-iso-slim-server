@@ -1,0 +1,10 @@
+[Trigger]
+Operation=Install
+Operation=Upgrade
+Type=Package
+Target=omarchy-server
+Target=omarchy-server-keyring
+[Action]
+Description=Applying reviewed Omarchy server migrations
+When=PostTransaction
+Exec=/usr/bin/omarchy-server-migrate
