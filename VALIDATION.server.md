@@ -1,6 +1,6 @@
 # Omarchy Slim Server — measured validation
 
-Latest validation: **2026-10-31, signed channel and refreshed 0.2.0 ISO**.
+Latest validation: **2026-10-31, live networking and emulated NIC matrix on the signed 0.2.0 ISO**.
 See the final section for current evidence. The original baseline was validated on 2026-10-29. This is an **unofficial community build**, not an
 Omarchy release or endorsement.
 
@@ -359,3 +359,88 @@ transitions and byte-identical ISO reproduction remain unverified. The server
 still deliberately omits desktop provisioning and BBS/Docker/admin applications.
 Host snapshots remain disabled by administrator request; guest snapshot and
 rollback behavior remain enabled and tested.
+
+## Live networking and emulated NIC matrix — 2026-10-31
+
+The delivered **0.2.0 ISO remains unchanged**, with SHA-256
+`8210964608eb3bae6297ceb16a199f93e1003bc1bccce5577d296a33c27cfe8a`.
+The test source is signed commit `0868bba` (NIC/peer support `2dedcb8`).
+No runtime package, installer phase or shared desktop behavior changed in this
+round. This extends the evidence for the existing release.
+
+The matrix booted new copy-on-write overlays of the accepted fresh installation
+`test-runs/server/20261031-024251-base`. Each backing-disk SHA-256 was checked
+again after the case, and receipts bind results to the exact ISO and test-source
+hashes. Existing releases, package archives and test disks were preserved.
+
+| Data NIC model | Actual kernel driver | DHCP and selected route/DNS | Cable loss/fallback/recovery | Cold boot and persistent static IPv4 |
+|---|---|---|---|---|
+| virtio-net-pci | virtio_net | Passed | Passed | Passed |
+| e1000 | e1000 | Passed | Passed | Passed |
+| rtl8139 | 8139cp | Passed | Passed | Passed |
+
+Each guest also had a management NIC and a separate isolated renewal NIC.
+Explicit MAC-matched networkd profiles selected the preferred uplink by route
+metric and the `~.` DNS routing domain. Disconnecting it through QMP removed
+its routes/resolver selection, selected management DHCP/DNS and preserved
+working HTTP and SSH. Reconnection restored the preferred route and DNS.
+Cold boot preserved that policy; the actual installer-generated static IPv4
+profile also retained its address, gateway and DNS on a further cold boot.
+Carrier loss is covered; loss of an upstream route with carrier still up is not.
+
+The third NIC connects to a loopback-only framed Ethernet DHCP/ARP fixture,
+not to a host bridge or LAN DHCP socket. Successful renewal requires an observed
+unicast REQUEST with a nonzero client address, an ACK with the expected lease,
+and an increased networkd lease timestamp. The initial libslirp-backed renewal
+attempt produced no ACK in the observed window and correctly failed. It is
+retained as failed evidence and is not counted as a successful renewal. The
+controlled peer provides explicit request/ACK evidence without weakening the
+assertion or changing the installed client.
+
+The virtio case resolved real external DNS, fetched the live fork channel over
+IPv4 HTTPS from inside the guest, and verified the manifest and database with
+the installed trusted keyring and pinned primary fingerprint. The database bytes
+matched the signed manifest; manifest SHA-256 remained
+`65fa2b0ce73c07c8e725f3434f2fc6378c8901b161a3c03e84127c423182a642`.
+No manual key import, local signature, package upgrade or weaker trust policy
+was used for that check.
+
+A further cold boot used a persistent IPv6-only data profile. A detached guest
+unit ran while **both IPv4-capable NIC cables were disconnected**. It verified
+no non-loopback IPv4 addresses, a static IPv6 default route, IPv6 HTTP transport,
+real AAAA answers over an IPv6 DNS endpoint, and a live IPv6 SSH listener.
+Management SSH and all server health checks recovered after reconnecting.
+The DNS endpoint forwarded the guest's IPv6 UDP requests through the host's
+IPv4 resolver. It is an explicit test adapter: the host has no upstream IPv6
+route, so public IPv6 Internet reachability remains unverified.
+
+All three cases rejected SSH password/keyboard-interactive negotiation when
+public keys were supplied, and recorded the complete IPv4/IPv6 listener table.
+Observed stock listeners included SSH TCP/22, loopback resolved DNS/53,
+resolved LLMNR TCP/UDP 5355 and multicast UDP 5353. These results do not claim
+that SSH is the only listening service or that a firewall was configured.
+The package set stayed at **176**, with boot integrity, package-database checks,
+networkd, resolved, SSH and guest snapshot services healthy.
+
+Final successful runs:
+
+- `test-runs/server/20261031-104254-network-virtio`
+- `test-runs/server/20261031-104414-network-e1000`
+- `test-runs/server/20261031-104517-network-rtl8139`
+
+All **94** existing regression checks passed again (12 server, 15 migrations,
+58 shared installer/image, 9 boot integrity). A separate overlay also rechecked
+the original default `restrict=on` networking and blocked external guest TCP.
+The online harness is opt-in; existing offline suites keep their prior policy.
+
+Signed acceptance, sanitized evidence, source hashes and checksums are under
+`release/server-network-2026.10.31/`. Credential media, SSH/private keys,
+serial/password transcripts, raw SSH command logs and VM disks are excluded
+from the distributable bundle. Failed exploratory runs have no passing receipt
+and are excluded from the acceptance aggregate.
+
+This is x86_64 QEMU/KVM NIC coverage, not physical hardware certification.
+Physical NICs/storage, Wi-Fi, public IPv6 Internet and Secure Boot remain
+unverified. The next release-maintenance milestone is fresh-checkout/empty-cache
+reproduction and automated release acceptance; physical deployment checks still
+need the relevant hardware and network.

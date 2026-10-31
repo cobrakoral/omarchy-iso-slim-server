@@ -228,6 +228,85 @@ selects an interface by its persistent MAC address and requires an
 address/prefix, an on-link gateway and DNS addresses; IPv6
 router advertisements remain enabled. No second DHCP daemon is enabled.
 
+### Multiple NICs and persistent policy
+
+The generated DHCP profile manages each matching hardware link. It does not
+infer which uplink should win when several links advertise a default route.
+Use MAC-matched files with names sorting before `20-omarchy-server.network`
+for an explicit site policy. For example, a backup/management link can use:
+
+```ini
+# /etc/systemd/network/10-management.network
+[Match]
+MACAddress=aa:bb:cc:dd:ee:01
+[Network]
+DHCP=ipv4
+IPv6AcceptRA=no
+DNSDefaultRoute=yes
+[DHCPv4]
+RouteMetric=2000
+UseDNS=yes
+```
+
+The preferred uplink can use:
+
+```ini
+# /etc/systemd/network/11-uplink.network
+[Match]
+MACAddress=aa:bb:cc:dd:ee:02
+[Network]
+DHCP=yes
+IPv6AcceptRA=yes
+DNSDefaultRoute=yes
+Domains=~.
+[DHCPv4]
+RouteMetric=100
+UseDNS=yes
+[IPv6AcceptRA]
+RouteMetric=100
+```
+
+The lower route metric selects the uplink. Its `~.` DNS routing domain sends
+ordinary queries to that link while it is available; the management link's
+DHCP DNS becomes available when the uplink loses carrier. This policy is
+explicit configuration, not an installer guess. It was tested through cable
+loss, recovery, DHCP renewal and cold boot. Networkd removes the failed link's
+routes and DNS configuration; this does not detect an upstream outage that
+leaves Ethernet carrier up.
+
+Apply network changes from the console or an independent management link,
+then use `networkctl reload` and `networkctl reconfigure <interface>`.
+Inspect `ip route`, `ip -6 route` and `resolvectl status`. Static IPv4 remains
+MAC-matched and persists across reboot. The text installer currently offers
+DHCP or static IPv4; IPv6-only static deployments need an administrator-owned
+networkd profile (`DHCP=no`, IPv6 `Address=`, `Gateway=` and `DNS=`). The
+IPv6-only acceptance uses such a persistent profile with all non-loopback
+IPv4 addresses removed. Public IPv6 routing still requires a suitable uplink.
+
+### Network acceptance matrix
+
+```sh
+python3 test/server/networking.py test-runs/server/<accepted-default-UEFI-run> \
+  --model all --external
+```
+
+This opt-in suite permits guest egress for real DNS and HTTPS, creates new
+copy-on-write disks, and leaves the accepted backing disk unchanged. It tests
+virtio, e1000 and RTL8139 data NIC models alongside a management NIC. A third
+isolated Ethernet socket peer records DHCP REQUEST/ACK renewal exchanges;
+it binds only to host loopback and never serves the host LAN. The original
+offline suites retain `restrict=on` networking.
+
+The virtio case additionally fetches and verifies the live signed channel,
+and runs a detached IPv6-only phase with both IPv4-capable NICs disconnected.
+Its IPv6 HTTP endpoint and DNS endpoint are host-loopback fixtures. The DNS
+endpoint forwards real AAAA queries through the host's IPv4 resolver because
+the validation host has no upstream IPv6 route. This proves guest IPv6-only
+transport, not public IPv6 Internet reachability. Receipts record ISO/source
+hashes, actual kernel NIC drivers, routes, resolver selection, renewal packets,
+SSH authentication refusal, listening ports and cold-boot service health.
+Physical NICs, storage controllers and Secure Boot require separate validation.
+
 ## Snapshots, updates and recovery
 
 The shared installer preserves upstream's `@`, `@home`, `@log`, and `@pkg`
