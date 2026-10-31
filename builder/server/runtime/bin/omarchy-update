@@ -1,16 +1,79 @@
 #!/bin/bash
 # Minimal applicable pipeline: lock, pre-update snapshot, full upgrade, boot check.
-set -euo pipefail
+set -Eeuo pipefail
+umask 077
+export LC_ALL=C
 if (( EUID != 0 )); then exec sudo -- "$0" "$@"; fi
 [[ $# == 0 || $* == -y ]] || { echo 'Usage: omarchy-update [-y]' >&2; exit 2; }
 exec 9>/run/omarchy-server-update.lock
 flock -n 9 || { echo 'Another server update is running.' >&2; exit 1; }
 mountpoint -q /boot || { echo "Cannot update: /boot is not mounted." >&2; exit 1; }
+# These are minimum working reserves, not an estimate of every possible upgrade.
+# Pacman still performs its normal transaction-specific disk-space checks.
+for spec in '/:536870912' '/boot:134217728'; do
+  path=${spec%:*}; minimum=${spec#*:}
+  available=$(df -B1 --output=avail "$path" | tail -n1)
+  if (( available < minimum )); then
+    printf 'Insufficient free space on %s: %s bytes available; at least %s required. Free space and retry.\n' "$path" "$available" "$minimum" >&2
+    exit 1
+  fi
+done
+# Keep the transcript on @log, outside the root snapshot. Never overwrite an
+# earlier failed update's evidence when retrying an interrupted transaction.
+mkdir -p /var/log/omarchy-server
+log=$(mktemp /var/log/omarchy-server/update-XXXXXXXX.log)
+state=/var/lib/omarchy-server/update-state
+stage=preflight
+failure() {
+  local status=${1:-1}
+  trap - ERR
+  printf 'Update failed during %s. Transcript: %s\n' "$stage" "$log" >&2
+  printf '%s\n' 'Correct the reported problem, then rerun omarchy-update. Do not reboot after a boot-artifact failure until boot-check succeeds or a known-good snapshot is restored.' >&2
+  exit "$status"
+}
+trap 'failure "$?"' ERR
+if [[ -e /var/lib/pacman/db.lck ]]; then
+  printf '%s\n' 'Pacman database is locked. Check for a running package manager. After an interrupted update, remove a stale /var/lib/pacman/db.lck only after confirming no package manager is running, then retry.' | tee -a "$log" >&2
+  failure 1
+fi
+mkdir -p "${state%/*}"
+if [[ -f $state ]]; then
+  printf 'Previous update did not complete: %s\n' "$(cat "$state")" | tee -a "$log" >&2
+  if grep -q '^pacman-hooks ' "$state"; then
+    printf 'A previous package transaction reported errors despite exit 0. Repair the failing hook or scriptlet and rerun it, or reinstall the affected packages. Then remove %s to acknowledge the repair and retry.\n' "$state" | tee -a "$log" >&2
+    failure 1
+  fi
+fi
+record_stage() {
+  local pending
+  stage=$1
+  pending=$(mktemp "${state%/*}/.update-state-XXXXXXXX")
+  printf '%s transcript=%s\n' "$stage" "$log" > "$pending"
+  sync -f "$pending"
+  mv -f -- "$pending" "$state"
+  sync -f "${state%/*}"
+}
+record_stage snapshot
 omarchy-snapshot create
 args=(); [[ ${1:-} != -y ]] || args+=(--noconfirm)
-# One full transaction updates the keyring packages as well. No desktop migrations.
-pacman -Syu "${args[@]}"
-limine-update
-omarchy-server-boot-check
-limine-snapper-sync
-printf 'Update complete; reboot when convenient.\n'
+record_stage pacman
+# A failed ALPM post-transaction hook can print an error while pacman exits 0.
+# Inspect its C-locale, uncoloured transcript as well as both pipeline statuses.
+set +e
+pacman --color never -Syu "${args[@]}" 2>&1 | tee -a "$log"
+statuses=("${PIPESTATUS[@]}")
+set -e
+if (( statuses[0] != 0 || statuses[1] != 0 )); then failure 1; fi
+if grep -q '^error:' "$log"; then
+  record_stage pacman-hooks
+  printf '%s\n' 'Pacman reported an error, possibly a failed transaction hook; package changes may already have been applied. Inspect the transcript, repair and rerun the failed hook/scriptlet or reinstall the affected packages; then acknowledge the repair by removing /var/lib/omarchy-server/update-state before retrying.' | tee -a "$log" >&2
+  failure 1
+fi
+record_stage boot-artifacts
+limine-update 2>&1 | tee -a "$log"
+omarchy-server-boot-check 2>&1 | tee -a "$log"
+record_stage snapshot-sync
+limine-snapper-sync 2>&1 | tee -a "$log"
+rm -f "$state"
+sync -f "${state%/*}"
+printf 'Update complete; reboot when convenient. Transcript: %s\n' "$log"
