@@ -1,0 +1,163 @@
+#!/usr/bin/python3
+"""Bootstrap the pinned server key, configure Pacman, or check repository policy."""
+
+import argparse
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+import urllib.parse
+import urllib.request
+
+FINGERPRINT = "7C5C6FEB40A5B493007FAA3650B1EB533F640140"
+DEFAULT = "https://raw.githubusercontent.com/cobrakoral/omarchy-iso-slim-server/server-packages/stable/$arch"
+CONF = Path("/etc/pacman.conf")
+REPO = Path("/etc/pacman.d/omarchy-server.conf")
+INCLUDE = "Include = /etc/pacman.d/omarchy-server.conf"
+
+
+def atomic_text(path, text, mode=0o644):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=".omarchy-server-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as target:
+            target.write(text)
+            target.flush()
+            os.fsync(target.fileno())
+        os.chmod(name, mode)
+        os.replace(name, path)
+        parent = os.open(path.parent, os.O_DIRECTORY)
+        try:
+            os.fsync(parent)
+        finally:
+            os.close(parent)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
+def repository_config(url):
+    parsed = urllib.parse.urlparse(url)
+    if (
+        parsed.scheme not in ("https", "file")
+        or re.search(r"\s", url)
+        or parsed.username
+        or parsed.password
+    ):
+        raise ValueError(
+            "Repository URL must be HTTPS or a local file URL without credentials/whitespace"
+        )
+    return (
+        "[omarchy-server]\nSigLevel = PackageRequired DatabaseRequired TrustedOnly\nServer = "
+        + url.rstrip("/")
+        + "\n"
+    )
+
+
+def configure():
+    text = CONF.read_text()
+    if not re.search(r"(?m)^\[options\]\s*$", text):
+        raise ValueError("Pacman configuration has no [options] section")
+    if not re.search(r"(?m)^\s*CheckSpace\s*(?:#.*)?$", text):
+        text = re.sub(r"(?m)^(\[options\]\s*)$", r"\1\nCheckSpace", text, count=1)
+    if INCLUDE not in text:
+        if re.search(r"(?m)^\[omarchy-server\]", text):
+            raise ValueError(
+                "An inline server repository exists; review it before enabling the packaged include"
+            )
+        text = text.rstrip() + "\n\n" + INCLUDE + "\n"
+    if not REPO.exists():
+        atomic_text(REPO, repository_config(DEFAULT))
+    if text != CONF.read_text():
+        backup = Path("/var/lib/omarchy-server/pacman.conf.before-repository")
+        if not backup.exists():
+            atomic_text(backup, CONF.read_text(), 0o600)
+        atomic_text(CONF, text)
+    check()
+
+
+def check():
+    levels = subprocess.check_output(
+        ["pacman-conf", "--repo", "omarchy-server", "SigLevel"], text=True
+    ).split()
+    required = {
+        "PackageRequired",
+        "PackageTrustedOnly",
+        "DatabaseRequired",
+        "DatabaseTrustedOnly",
+    }
+    if not required.issubset(levels):
+        raise ValueError(
+            "Server repository requires trusted package AND database signatures"
+        )
+    print(
+        "Server repository requires trusted package and database signatures.",
+        flush=True,
+    )
+
+
+def enable(url):
+    # Validate URL before fetching or modifying trust/configuration.
+    body = repository_config(url)
+    key_url = url.replace("$arch", "x86_64").rstrip("/") + "/omarchy-server.asc"
+    with tempfile.TemporaryDirectory(prefix="omarchy-server-key-") as directory:
+        key = Path(directory) / "maintainer.asc"
+        with urllib.request.urlopen(key_url, timeout=30) as response:
+            key.write_bytes(response.read(128 * 1024 + 1))
+        if key.stat().st_size > 128 * 1024:
+            raise ValueError("Unexpected repository key size")
+        output = subprocess.check_output(
+            ["gpg", "--batch", "--with-colons", "--show-keys", str(key)], text=True
+        )
+        primary = []
+        want = False
+        for line in output.splitlines():
+            fields = line.split(":")
+            if fields[0] == "pub":
+                want = True
+            elif fields[0] == "fpr" and want:
+                primary.append(fields[9])
+                want = False
+        if primary != [FINGERPRINT]:
+            raise ValueError(
+                "Repository key does not match the pinned maintainer fingerprint"
+            )
+        subprocess.run(["pacman-key", "--add", str(key)], check=True)
+        subprocess.run(["pacman-key", "--lsign-key", FINGERPRINT], check=True)
+    atomic_text(REPO, body)
+    configure()
+    print(
+        "Trust/configuration enabled. Run: sudo pacman -Syu omarchy-server omarchy-server-keyring"
+    )
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--enable", action="store_true")
+    action.add_argument("--configure", action="store_true")
+    action.add_argument("--check", action="store_true")
+    parser.add_argument("--url", default=DEFAULT)
+    args = parser.parse_args()
+    edition = Path("/etc/omarchy-edition")
+    if (
+        os.geteuid() != 0
+        or not edition.is_file()
+        or edition.read_text().strip() != "server"
+    ):
+        raise ValueError("Repository configuration requires root on the server edition")
+    if args.enable:
+        enable(args.url)
+    elif args.configure:
+        configure()
+    else:
+        check()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        print("error: Server repository:", error, file=sys.stderr)
+        sys.exit(1)

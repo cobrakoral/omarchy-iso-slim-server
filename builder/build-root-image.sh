@@ -196,6 +196,10 @@ if [[ -n ${OMARCHY_IMAGE_LOCALDB_COPY:-} ]]; then
   rm -rf "$OMARCHY_IMAGE_LOCALDB_COPY"
   mkdir -p "$OMARCHY_IMAGE_LOCALDB_COPY"
   cp -a "$root/var/lib/pacman/local" "$OMARCHY_IMAGE_LOCALDB_COPY/"
+  if [[ ${OMARCHY_EDITION:-desktop} == server ]]; then
+    cut -d: -f1 "$root/etc/passwd" > "$OMARCHY_IMAGE_LOCALDB_COPY/server-system-users"
+    cut -d: -f1 "$root/etc/group" > "$OMARCHY_IMAGE_LOCALDB_COPY/server-system-groups"
+  fi
 fi
 
 installed=$(find "$root/var/lib/pacman/local" -mindepth 1 -maxdepth 1 -type d | wc -l)
@@ -260,7 +264,9 @@ CMDLINE
 # ALL_kver as a literal path. It sets no ALL_microcode, which is deprecated;
 # the microcode hook in mkinitcpio.conf adds the microcode.
 image_kver=$(ls -1 "$root/usr/lib/modules/" | grep -E '^[0-9]+\.' | head -1)
-if [[ -z $image_kver ]]; then
+if [[ ${OMARCHY_EDITION:-desktop} == server ]]; then
+  echo "Server: build the machine-specific UKI at install time (no Plymouth)."
+elif [[ -z $image_kver ]]; then
   echo "WARNING: no kernel version found under /usr/lib/modules/; skipping the UKI pre-build"
 else
   # The kernel package this image carries: linux-omarchy since upstream made it

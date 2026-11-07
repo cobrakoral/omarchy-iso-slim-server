@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""Verify deployed server boot artifacts against the installed kernel."""
+
+import hashlib
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+
+
+def digest(path):
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").digest()
+
+
+def installed_kernel(root):
+    matches = [
+        p.parent
+        for p in (root / "usr/lib/modules").glob("*/pkgbase")
+        if p.read_text().strip() == "linux-omarchy"
+    ]
+    if len(matches) != 1:
+        raise ValueError("Expected exactly one installed linux-omarchy modules tree")
+    kernel = matches[0] / "vmlinuz"
+    if not kernel.is_file() or not kernel.stat().st_size:
+        raise ValueError(f"Installed kernel is missing: {kernel}")
+    return matches[0].name, kernel
+
+
+def uki_sections(path):
+    import pefile  # Installed by systemd-ukify.
+
+    with pefile.PE(str(path), fast_load=True) as image:
+        return {
+            s.Name.rstrip(b"\0").decode("ascii"): s.get_data()[: s.Misc_VirtualSize]
+            for s in image.sections
+        }
+
+
+def initramfs_matches(path, release):
+    listing = subprocess.check_output(
+        ["lsinitcpio", "-l", str(path)], text=True, stderr=subprocess.STDOUT
+    )
+    versions = set(re.findall(r"(?:^|/)usr/lib/modules/([^/\s]+)/", listing, re.M))
+    if versions != {release}:
+        raise ValueError(
+            f"Initramfs modules {sorted(versions)} do not match installed kernel {release}"
+        )
+
+
+def verify(root, efi):
+    release, kernel = installed_kernel(root)
+    if efi:
+        path = root / "boot/EFI/Linux/omarchy_linux-omarchy.efi"
+        sections = uki_sections(path)
+        embedded_release = sections.get(".uname", b"").rstrip(b"\0").decode()
+        if embedded_release != release:
+            raise ValueError(
+                f"UKI kernel {embedded_release!r} does not match {release}"
+            )
+        if hashlib.sha256(sections.get(".linux", b"")).digest() != digest(kernel):
+            raise ValueError("UKI kernel payload differs from the installed kernel")
+        initrd = sections.get(".initrd", b"")
+        if not initrd:
+            raise ValueError("UKI initramfs is missing")
+        with tempfile.NamedTemporaryFile(prefix="omarchy-boot-check-") as stream:
+            stream.write(initrd)
+            stream.flush()
+            initramfs_matches(Path(stream.name), release)
+    else:
+        machine_id = (root / "etc/machine-id").read_text().strip()
+        if not re.fullmatch(r"[0-9a-f]{32}", machine_id):
+            raise ValueError("Invalid machine ID")
+        deployed = root / "boot" / machine_id / "linux-omarchy"
+        if digest(deployed / "vmlinuz") != digest(kernel):
+            raise ValueError("BIOS kernel payload differs from the installed kernel")
+        initramfs_matches(deployed / "initramfs", release)
+    return release
+
+
+def main():
+    try:
+        if subprocess.run(["mountpoint", "-q", "/boot"]).returncode:
+            raise ValueError("/boot must be mounted before checking boot artifacts")
+        release = verify(Path("/"), Path("/sys/firmware/efi").is_dir())
+    except Exception as error:
+        print(f"Boot verification failed: {error}", file=sys.stderr)
+        return 1
+    print(f"Boot artifacts match installed kernel {release}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -45,6 +45,7 @@ import importlib
 import os
 import time
 from contextlib import contextmanager
+from collections.abc import Callable
 from pathlib import Path
 from typing import Iterable, Iterator
 
@@ -287,14 +288,13 @@ def _write_locale_conf_for_prebuilt(installer, locale_config) -> None:
     locale.conf is never written. The installed system then falls back to
     systemd's LANG=C.UTF-8 instead of the locale it just generated.
 
-    So: if the locale is present and *enabled* in locale.gen, the image already
-    did set_locale's work and only the last line is missing. Anything else is a
-    genuine failure and is left alone for the caller's error to stand.
+    Require both an enabled locale.gen entry and the compiled locale in the
+    target archive before writing locale.conf. Otherwise propagate the failure.
     """
     target = Path(installer.target)
     locale_gen = target / "etc" / "locale.gen"
     if not locale_gen.is_file():
-        return
+        raise RuntimeError(f"Missing locale.gen in target: {locale_gen}")
     lang, encoding = locale_config.sys_lang, locale_config.sys_enc
     # sys_lang may or may not already carry the encoding ("en_US" vs
     # "en_US.UTF-8"); accept the entry either way, as set_locale's regex does.
@@ -305,12 +305,18 @@ def _write_locale_conf_for_prebuilt(installer, locale_config) -> None:
         None,
     )
     if not enabled:
-        return
+        raise RuntimeError(f"No enabled matching entry for {lang} ({encoding}) in {locale_gen}")
+    if not luks_tuning._locale_archive_has_all(target):
+        raise RuntimeError(f"Locale {enabled} is enabled in {locale_gen} but not compiled in target locale archive")
     (target / "etc" / "locale.conf").write_text(f"LANG={enabled}\n")
     info(f"› locale {enabled} is already compiled into the image; wrote locale.conf directly")
 
 
-def perform_filesystem_operations(arch_config: ArchConfig, throwaway_root_fs: bool = False) -> None:
+def perform_filesystem_operations(
+    arch_config: ArchConfig,
+    throwaway_root_fs: bool = False,
+    pre_partition: Callable[[], None] | None = None,
+) -> None:
     """Partition, format, encrypt. archinstall's FilesystemHandler is its own
     object (separate from Installer) so we run it before opening the
     Installer context manager.
@@ -343,6 +349,8 @@ def perform_filesystem_operations(arch_config: ArchConfig, throwaway_root_fs: bo
     with _filesystem_step_tweaks(throwaway_root_fs):
         for attempt in range(1, attempts + 1):
             udev_sync()
+            if pre_partition is not None:
+                pre_partition()
             try:
                 handler.perform_filesystem_operations(**fs_kwargs)
                 return
@@ -498,7 +506,7 @@ def install_base_delta(
 
     # Each framework call below has its own [step] timer: the function takes
     # 0.8 s with no package to install, and the timers show where.
-    from .phases_impl import _time_step
+    from .phases_impl import _time_step, _server_edition
 
     with _time_step("DELTA.prepare_fs_and_encrypt"):
         for mod in disk_config.device_modifications:
@@ -529,7 +537,11 @@ def install_base_delta(
             installer.set_vconsole(locale_config)
 
     with _time_step("DELTA.package_delta"):
-        delta = target_missing_packages(installer.target, installer._base_packages)
+        # Server firmware families are selected by the edition manifest.
+        server = _server_edition()
+        packages = (pkg for pkg in installer._base_packages
+                    if not (server and pkg == "linux-firmware"))
+        delta = target_missing_packages(installer.target, packages)
         if delta:
             installer.pacman.strap(delta)
         installer._helper_flags["base-strapped"] = True

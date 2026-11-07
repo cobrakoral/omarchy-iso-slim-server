@@ -9,3 +9,6 @@ __pycache__/
 test-runs/**
 
 .claude
+
+# Isolated server build/cache/analysis workspace
+.server-work/

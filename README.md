@@ -1,3 +1,21 @@
+# Omarchy Slim Server ISO — unofficial
+
+This fork builds an **unofficial, fully offline server edition** with a minimal
+Btrfs root image, standard console login, OpenSSH, systemd-networkd/resolved,
+and Omarchy-compatible Limine/Snapper recovery. Encryption and cloud-init are
+optional and disabled by default. It is not endorsed or signed by Omarchy.
+
+See [server build, installation, recovery and test instructions](README.server.md).
+
+```sh
+OMARCHY_EDITION=server bin/omarchy-iso-make --no-boot-offer
+```
+
+The documentation below describes the inherited **upstream desktop** builder.
+Server-specific behavior and limitations are documented separately above.
+
+---
+
 # Omarchy ISO
 
 [![Nightly ISO Build](https://github.com/omacom/omarchy-iso/actions/workflows/nightly-build.yml/badge.svg?branch=quattro&event=schedule)](https://github.com/omacom/omarchy-iso/actions/workflows/nightly-build.yml?query=branch%3Aquattro+event%3Aschedule)

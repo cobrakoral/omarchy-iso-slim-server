@@ -1,0 +1,10 @@
+[
+  {
+    "id": "0001-package-repository",
+    "scope": "server",
+    "file": "0001-package-repository.sh",
+    "sha256": "185a000db4668325408f66f42ec4f1c5887ec75be663025606179c345d116a81",
+    "idempotent": true,
+    "review": "Server package channel and Pacman space checks; no desktop provisioning."
+  }
+]

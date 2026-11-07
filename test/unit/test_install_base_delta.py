@@ -40,6 +40,9 @@ class Installer44:
     def _prepare_fs_type(self, fs_type, mountpoint):
         self.calls.append(("prepare", fs_type, mountpoint))
 
+    def set_vconsole(self, locale_config):
+        self.calls.append(("vconsole", locale_config))
+
     def _get_microcode(self):
         return None
 
@@ -64,17 +67,62 @@ class PacmanConfig:
 
 
 class InstallBaseDeltaTest(unittest.TestCase):
-    def run_delta(self, installer):
-        arch = self.enterContext(adapter({"archinstall.lib.pacman.config": {"PacmanConfig": PacmanConfig}}, version="4.5"))
+    def run_delta(self, installer, server=False, locale_config=None, locale_archive=b"en_US.utf8\n"):
+        archinstall_names = {
+            "archinstall.lib.pacman.config": {"PacmanConfig": PacmanConfig},
+        }
+        arch = self.enterContext(adapter(archinstall_names, version="4.5"))
+        self.enterContext(mock.patch.object(arch.luks_tuning, "run", return_value=types.SimpleNamespace(stdout=locale_archive)))
         # install_base_delta times its steps with phases_impl's timer.
-        timer = types.SimpleNamespace(_time_step=lambda name: nullcontext())
+        timer = types.SimpleNamespace(_time_step=lambda name: nullcontext(), _server_edition=lambda: server)
         self.enterContext(mock.patch.dict(sys.modules, {"orchestrator.phases_impl": timer}))
         config = types.SimpleNamespace(mirror_config=None, pacman_config=None)
-        arch.install_base_delta(installer, config, hostname=None, locale_config=None)
+        arch.install_base_delta(installer, config, hostname=None, locale_config=locale_config)
         return installer.calls
+
+    def test_prebuilt_locale_success_writes_locale_conf(self):
+        target = self.target()
+        etc = target / "etc"
+        etc.mkdir(parents=True)
+        (etc / "locale.gen").write_text("en_US.UTF-8 UTF-8\n")
+        installer = Installer45(target, [])
+        installer.set_locale = mock.Mock(return_value=False)
+        installer.set_keyboard_language = mock.Mock()
+        locale_config = types.SimpleNamespace(sys_lang="en_US.UTF-8", sys_enc="UTF-8", kb_layout="us")
+        self.run_delta(installer, locale_config=locale_config, locale_archive=b"en_US.utf8\n")
+        locale_conf = etc / "locale.conf"
+        self.assertTrue(locale_conf.is_file())
+        self.assertEqual(locale_conf.read_text(), "LANG=en_US.UTF-8\n")
+
+    def test_prebuilt_locale_failure_when_archive_missing(self):
+        target = self.target()
+        etc = target / "etc"
+        etc.mkdir(parents=True)
+        (etc / "locale.gen").write_text("pt_BR.UTF-8 UTF-8\n")
+        installer = Installer45(target, [])
+        installer.set_locale = mock.Mock(return_value=False)
+        installer.set_keyboard_language = mock.Mock()
+        locale_config = types.SimpleNamespace(sys_lang="pt_BR.UTF-8", sys_enc="UTF-8", kb_layout="br")
+        with self.assertRaises(RuntimeError) as cm:
+            self.run_delta(installer, locale_config=locale_config, locale_archive=b"en_US.utf8\n")
+        self.assertIn("not compiled in target locale archive", str(cm.exception))
+        self.assertFalse((etc / "locale.conf").exists())
+
 
     def target(self):
         return Path(self.enterContext(TemporaryDirectory()))
+
+    def test_server_uses_selected_firmware_families(self):
+        installer = Installer45(self.target(), [])
+        installer._base_packages = ["linux-firmware", "needed-package"]
+        calls = self.run_delta(installer, server=True)
+        self.assertIn(("strap", ["needed-package"]), calls)
+
+    def test_desktop_keeps_firmware_metapackage(self):
+        installer = Installer45(self.target(), [])
+        installer._base_packages = ["linux-firmware"]
+        calls = self.run_delta(installer)
+        self.assertIn(("strap", ["linux-firmware"]), calls)
 
     def test_archinstall_44_gets_the_mountpoint(self):
         calls = self.run_delta(Installer44(self.target()))

@@ -302,7 +302,7 @@ class PrepareInstallTargetTest(unittest.TestCase):
 
     def test_protected_checks_real_mounts_then_image(self):
         ctx = types.SimpleNamespace(
-            is_protected=True, target=Path("/mnt"),
+            is_protected=True, target=Path("/mnt"), state={},
             user_configuration={"disk_config": {"config_type": "pre_mounted_config"}},
         )
         phases_impl.prepare_install_target(ctx)
@@ -325,6 +325,7 @@ class VerifyPreMountedRootEmptyTest(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.ctx = types.SimpleNamespace(
             is_protected=True, target=Path("/mnt"), state_dir=Path(tmp.name) / "state",
+            state={},
             user_configuration={"disk_config": {"config_type": "pre_mounted_config"}},
         )
         self.calls = []
@@ -375,11 +376,13 @@ class VerifyPreMountedRootEmptyTest(unittest.TestCase):
     def test_configurators_fresh_filesystem_passes(self):
         self.check(self.FRESH)
         self.assertEqual(self.calls[-1][0], "umount")
+        self.assertEqual(self.ctx.state["verified_protected_target"], self.ctx.target)
 
     def test_file_in_home_is_refused(self):
         with self.assertRaisesRegex(RuntimeError, r"@home/emir/notes.txt.*fresh"):
             self.check(self.FRESH + ["@home/emir/notes.txt"])
         self.assertEqual(self.calls[-1][0], "umount")
+        self.assertNotIn("verified_protected_target", self.ctx.state)
 
     def test_other_subvolume_is_refused(self):
         with self.assertRaisesRegex(RuntimeError, r"found @snapshots\b"):

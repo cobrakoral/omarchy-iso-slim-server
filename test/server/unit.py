@@ -1,0 +1,263 @@
+#!/usr/bin/env python3
+import importlib.util
+from pathlib import Path
+import unittest
+import sys
+import types
+import tempfile
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def load(name, path):
+    spec = importlib.util.spec_from_file_location(name, ROOT / path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+config = load("config", "builder/server/config.py")
+packages = load("packages", "builder/server/check-packages.py")
+
+
+class ServerTests(unittest.TestCase):
+    def test_cloud_config_survives_chroot_api_mounts(self):
+        # arch-chroot binds /run from the live system. The temporary pacman
+        # config must live on the target's persistent tree during its call.
+        with tempfile.TemporaryDirectory() as name:
+            target = Path(name)
+            context = types.SimpleNamespace(
+                target=target,
+                omarchy_install={"server": {"cloud_init": True}},
+                authorized_keys_path=None,
+            )
+            package = types.ModuleType("orchestrator")
+            package.__path__ = []
+            shared = types.SimpleNamespace(OFFLINE_MIRROR=Path("/offline"))
+            with patch.dict(
+                sys.modules,
+                {"orchestrator": package, "orchestrator.phases_impl": shared},
+            ):
+                spec = importlib.util.spec_from_file_location(
+                    "orchestrator.server_test",
+                    ROOT
+                    / "configs/airootfs/usr/share/omarchy-iso/orchestrator/server.py",
+                )
+                server = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(server)
+
+            def chroot(ctx, *args):
+                if args[0] == "pacman":
+                    config_path = args[args.index("--config") + 1]
+                    self.assertFalse(config_path.startswith("/run/"))
+                    self.assertTrue((target / config_path.lstrip("/")).is_file())
+
+            with patch.object(
+                server, "chroot", side_effect=chroot
+            ) as calls, patch.object(server.subprocess, "run"), patch.object(
+                server.Path, "read_text", return_value="[offline]\n"
+            ):
+                server.cloud_init(context)
+            self.assertTrue(
+                any(call.args[1] == "pacman" for call in calls.call_args_list)
+            )
+            enabled = [
+                call.args for call in calls.call_args_list if "enable" in call.args
+            ]
+            self.assertTrue(any("cloud-init-main.service" in call for call in enabled))
+            self.assertFalse(
+                (target / "etc/pacman.d/omarchy-server-offline.conf").exists()
+            )
+
+    def test_cloud_opt_out_does_not_run_pacman(self):
+        package = types.ModuleType("orchestrator")
+        package.__path__ = []
+        with patch.dict(
+            sys.modules,
+            {
+                "orchestrator": package,
+                "orchestrator.phases_impl": types.SimpleNamespace(),
+            },
+        ):
+            spec = importlib.util.spec_from_file_location(
+                "orchestrator.server_test",
+                ROOT / "configs/airootfs/usr/share/omarchy-iso/orchestrator/server.py",
+            )
+            server = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(server)
+        with patch.object(server, "chroot") as chroot, patch.object(
+            server.subprocess, "run"
+        ) as run:
+            server.cloud_init(
+                types.SimpleNamespace(omarchy_install={"server": {"cloud_init": False}})
+            )
+        chroot.assert_not_called()
+        run.assert_not_called()
+
+    def test_disk_picker_excludes_floppy_read_only_and_mounted_disks(self):
+        def disk(name, size=16 * 1024**3, ro=False, children=None):
+            return dict(
+                path=name,
+                type="disk",
+                size=size,
+                ro=ro,
+                mountpoints=[None],
+                children=children or [],
+            )
+
+        devices = [
+            disk("/dev/fd0", size=0),
+            disk("/dev/readonly", ro=True),
+            disk("/dev/live", children=[dict(mountpoints=["/run/archiso/bootmnt"])]),
+            disk("/dev/target"),
+        ]
+        self.assertEqual(
+            [d["path"] for d in config.candidate_disks(devices)], ["/dev/target"]
+        )
+
+    def test_locale_picker_accepts_arch_whitespace(self):
+        text = "# Configuration\n#en_US.UTF-8 UTF-8  \npt_BR.UTF-8 UTF-8\t\n#en_US ISO-8859-1  \n"
+        self.assertEqual(config.supported_locales(text), ["en_US.UTF-8", "pt_BR.UTF-8"])
+
+    def test_dhcp_and_ipv6_without_interface_name(self):
+        text = config.network_config({})
+        self.assertIn("DHCP=yes", text)
+        self.assertIn("IPv6AcceptRA=yes", text)
+        self.assertNotIn("Name=", text)
+
+    def test_static_ipv4_and_ipv6_dns(self):
+        text = config.network_config(
+            dict(
+                network="static",
+                mac="52:54:00:12:34:56",
+                address="192.0.2.4/24",
+                gateway="192.0.2.1",
+                dns="192.0.2.53 2001:db8::53",
+            )
+        )
+        self.assertIn("DHCP=ipv6", text)
+        self.assertIn("DNS=2001:db8::53", text)
+
+    def test_refuse_bad_network_before_disk_work(self):
+        for kw in [
+            dict(address="bad"),
+            dict(gateway="198.51.100.1"),
+            dict(dns="1.1.1.1\n[Match]"),
+        ]:
+            args = dict(
+                network="static",
+                mac="52:54:00:12:34:56",
+                address="192.0.2.4/24",
+                gateway="192.0.2.1",
+                dns="192.0.2.53",
+            )
+            args.update(kw)
+            with self.assertRaises(ValueError):
+                config.network_config(args)
+
+    def test_no_desktop_in_resolved_closure(self):
+        packages.check(
+            ["systemd", "openssh", "btrfs-progs", "limine-snapper-sync-server"]
+        )
+        for package in [
+            "networkmanager",
+            "hyprland",
+            "wayland",
+            "libnotify",
+            "libx11",
+            "cloud-init",
+            "sddm",
+            "pipewire",
+            "docker",
+            "qt6-base",
+        ]:
+            with self.subTest(package=package), self.assertRaises(ValueError):
+                packages.check([package])
+
+    @patch.object(config, "validate")
+    def test_official_layout_and_opt_in_encryption(self, _):
+        answers = dict(
+            disk="/dev/vda",
+            hostname="server",
+            username="admin",
+            password_hash="$6$test",
+        )
+        conf, creds = config.make_config(answers, 16 * 1024**3)
+        disk = conf["disk_config"]
+        parts = disk["device_modifications"][0]["partitions"]
+        self.assertNotIn("disk_encryption", disk)
+        self.assertEqual(
+            [s["name"] for s in parts[1]["btrfs"]], ["@", "@home", "@log", "@pkg"]
+        )
+        self.assertNotIn("cloud_init", conf["omarchy_install"]["server"])
+        self.assertEqual(creds["users"][0]["enc_password"], "$6$test")
+        answers.update(encrypt=True, encryption_password="test-passphrase")
+        conf, _ = config.make_config(answers, 16 * 1024**3)
+        self.assertEqual(
+            conf["disk_config"]["disk_encryption"]["encryption_type"], "luks"
+        )
+
+    @patch.object(config, "validate")
+    def test_refuse_undersized_disk(self, _):
+        with self.assertRaises(ValueError):
+            config.make_config({}, 4 * 1024**3)
+
+
+class ServerKeyringTests(unittest.TestCase):
+    def module(self):
+        package = types.ModuleType("orchestrator")
+        package.__path__ = []
+        with patch.dict(
+            sys.modules,
+            {
+                "orchestrator": package,
+                "orchestrator.phases_impl": types.SimpleNamespace(),
+            },
+        ):
+            return load(
+                "orchestrator.server_keyring",
+                "configs/airootfs/usr/share/omarchy-iso/orchestrator/server.py",
+            )
+
+    def test_installs_explicit_acpi_poweroff_policy(self):
+        server = self.module()
+        policy = (ROOT / "builder/server/logind.conf").read_text()
+        self.assertIn("HandlePowerKey=poweroff", policy.splitlines())
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            context = types.SimpleNamespace(target=target)
+            with patch.object(server.Path, "read_text", return_value=policy):
+                server.configure_power_button(context)
+            installed = (
+                target / "etc/systemd/logind.conf.d/90-omarchy-server-power-button.conf"
+            )
+            self.assertEqual(installed.read_text(), policy)
+            self.assertEqual(installed.stat().st_mode & 0o777, 0o644)
+
+    def test_populates_only_server_anchor_and_stops_agents(self):
+        server = self.module()
+        ctx = types.SimpleNamespace(target=Path("/mnt"))
+        with patch.object(server, "chroot") as chroot, patch.object(
+            server.subprocess, "run"
+        ) as run:
+            server.populate_server_keyring(ctx)
+        chroot.assert_called_once_with(
+            ctx, "pacman-key", "--populate", "omarchy-server"
+        )
+        self.assertIn("gpgconf", run.call_args.args[0])
+        self.assertFalse(run.call_args.kwargs["check"])
+
+    def test_populate_failure_still_stops_agents(self):
+        server = self.module()
+        ctx = types.SimpleNamespace(target=Path("/mnt"))
+        with patch.object(
+            server, "chroot", side_effect=RuntimeError("test failure")
+        ), patch.object(server.subprocess, "run") as run:
+            with self.assertRaises(RuntimeError):
+                server.populate_server_keyring(ctx)
+        run.assert_called_once()
+
+
+if __name__ == "__main__":
+    unittest.main()

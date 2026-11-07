@@ -1,0 +1,14 @@
+{
+  "revision": "Repository: https://github.com/omacom/omarchy\nRevision: 84782475aeb885c8d05f9e85b6ad0f1a0add60e5 (quattro, 2026-10-29)\nFiles in this directory are copied verbatim from this revision, except this\nprovenance record. Preserve the MIT license when refreshing the copies.",
+  "files": {
+    "LICENSE": "717ba1949502290f8e47688ae2e323acd06c8ca47aec9f7596b15f678c1af4a2",
+    "REVISION": "5b4877dd6bdc334c6176bf0ca319aa657bc3e6c28c3356f005b210ef71104772",
+    "bin/omarchy-cmd-missing": "791f70dda4f3b27da47cdfb5d684dadaa1b79b374ec4523ec1316119a6d71814",
+    "bin/omarchy-snapshot": "a154bb5fd33ad3288be4783557887a7207176e9d05bc72585c30e27fea8e3e7b",
+    "default/limine/default.conf": "a70caddc25902cecc80751882a9aa391c0f33f177598680e40aaf6ab853be866",
+    "default/limine/limine.conf": "cb4113df8b9dd7bed70bdd7e3c57f2a67cde95c5ff7434ee4c6700355da13569",
+    "default/snapper/root": "151d960499442fbbc751abe12cec5fb07521cc39bbc616d1ed1eda75f8edad88",
+    "etc/limine-entry-tool.d/omarchy-uki.conf": "19b45bf995f5f62a6defdfa9046c3f4726042b8e1bb65adf4b8a3ec10a026b9a",
+    "install/config/snapper.sh": "7ae6e95f6db188f76a9bbb2546e4b6d73e0788960c35cde1512428504d7bb762"
+  }
+}

@@ -217,7 +217,14 @@ def _root_image() -> Path:
 ROOT_IMAGE_REQUIRED_PACKAGES = ("limine", "omarchy-keyring")
 
 
+def _server_edition() -> bool:
+    marker = Path("/etc/omarchy-edition")
+    return marker.is_file() and marker.read_text().strip() == "server"
+
+
 def _root_image_required_packages() -> list[str]:
+    if _server_edition():
+        return [*ROOT_IMAGE_REQUIRED_PACKAGES, "omarchy-server", "snapper", "openssh"]
     return [
         *ROOT_IMAGE_REQUIRED_PACKAGES,
         _omarchy_runtime_package(),
@@ -267,13 +274,22 @@ def _copy_firmware_stage_into_target(ctx: InstallContext) -> None:
 
 def prepare_live(ctx: InstallContext) -> None:
     _stage_qualcomm_firmware()
+    release_install_disk(ctx)
+    load_install_config(ctx)
+
+
+def release_install_disk(ctx: InstallContext, disk_seq: int | None = None) -> None:
     if ctx.is_protected:
         info("› protected mode: skipping whole-disk cleanup")
     else:
         disk = _install_disk(ctx)
         if disk:
             info(f"› cleaning up holders on install disk: {disk}")
-            result = capture(["omarchy-iso-cleanup-disk", disk])
+            cmd = ["omarchy-iso-cleanup-disk"]
+            if disk_seq is not None:
+                cmd.extend(["--disk-seq", str(disk_seq)])
+            cmd.append(disk)
+            result = capture(cmd)
             for line in (result.stdout + result.stderr).splitlines():
                 info(f"  {line}")
             if result.returncode != 0:
@@ -281,6 +297,7 @@ def prepare_live(ctx: InstallContext) -> None:
                 lines = result.stdout.strip().splitlines()
                 raise RuntimeError(lines[-1] if lines else f"Could not release {disk}")
 
+def load_install_config(ctx: InstallContext) -> None:
     info("› loading configurator output")
     ctx.state["arch_config_handler"] = arch.load_arch_config(
         ctx.arch_config_path, ctx.creds_path
@@ -316,6 +333,7 @@ def prepare_install_target(ctx: InstallContext) -> None:
         # The protected layout exists already; check the real mounts.
         _, device = _root_image_target_mounts(ctx.target)
         verify_pre_mounted_root_empty(ctx, device)
+        ctx.state["verified_protected_target"] = ctx.target
     else:
         verify_root_image_layout(ctx.user_configuration.get("disk_config") or {})
     verify_install_medium(ctx)
@@ -624,6 +642,7 @@ def arch_install_system(ctx: InstallContext) -> None:
             arch.perform_filesystem_operations(
                 config,
                 throwaway_root_fs=True,
+                pre_partition=ctx.state.get("pre_partition_check"),
             )
 
     info("› opening installer context")
@@ -667,7 +686,7 @@ def arch_install_system(ctx: InstallContext) -> None:
             # is a pacman run only for a kernel the image does not hold (linux-t2).
             missing_headers = arch.target_missing_packages(
                 installer.target, [f"{kernel}-headers" for kernel in config.kernels])
-            if missing_headers:
+            if missing_headers and not _server_edition():
                 with _time_step(f"STEP.kernel_headers ({' '.join(missing_headers)})"):
                     installer.add_additional_packages(missing_headers)
 
@@ -1835,33 +1854,41 @@ def _mask_mkinitcpio_pacman_hooks(
     """
     hooks_dir = root / "etc/pacman.d/hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
+    masks = ctx.state.setdefault("pacman_hook_masks", {})
     for name in names:
         path = hooks_dir / name
-        backup = hooks_dir / f"{name}.omarchy-backup"
         if _is_devnull_symlink(path):
             continue
+        backup = None
         if path.exists() or path.is_symlink():
-            backup.unlink(missing_ok=True)
+            backup = hooks_dir / f"{name}.omarchy-backup"
+            if backup.exists() or backup.is_symlink():
+                raise RuntimeError(f"Existing Pacman hook backup needs recovery: {backup}")
+        masks[path] = backup
+        if backup is not None:
             path.rename(backup)
         path.symlink_to("/dev/null")
 
 
 def _unmask_mkinitcpio_pacman_hooks(
     ctx: InstallContext,
-    root: Path = Path("/"),
+    root: Path | None = Path("/"),
     names: tuple[str, ...] = DEFERRED_BOOT_HOOKS,
 ) -> None:
-    hooks_dir = root / "etc/pacman.d/hooks"
-    for name in names:
-        path = hooks_dir / name
-        backup = hooks_dir / f"{name}.omarchy-backup"
+    masks = ctx.state.get("pacman_hook_masks", {})
+    paths = list(masks) if root is None else [root / "etc/pacman.d/hooks" / name for name in names]
+    for path in paths:
+        if path not in masks:
+            continue
+        backup = masks[path]
         try:
             if _is_devnull_symlink(path):
                 path.unlink()
-            if backup.exists() or backup.is_symlink():
+            if backup is not None and (backup.exists() or backup.is_symlink()):
                 backup.rename(path)
+            del masks[path]
         except OSError as exc:
-            info(f"warning: failed to restore pacman hook mask for {name}: {exc}")
+            info(f"warning: failed to restore pacman hook mask for {path.name}: {exc}")
 
 
 def _write_language_marker(ctx: InstallContext) -> None:
@@ -3246,7 +3273,8 @@ def _tailscale_authkey(path: Path) -> str:
 
 def validate_boot(ctx: InstallContext) -> None:
     _assert_boot_hooks_restored(ctx)
-    _validate_kernel_headers(ctx)
+    if not _server_edition():
+        _validate_kernel_headers(ctx)
 
     boot = _boot_intent(ctx)
     storage = _storage_intent(ctx)
@@ -3616,7 +3644,7 @@ def _assert_boot_hooks_restored(ctx: InstallContext) -> None:
     restores it in a finally, but a mask that survived would be invisible until
     the first kernel update shipped a UKI-less boot. Repair, then insist.
     """
-    cleanup_target_hook_masks(ctx)
+    _unmask_mkinitcpio_pacman_hooks(ctx, ctx.target, TARGET_DEFERRED_BOOT_HOOKS)
 
     hooks_dir = ctx.target / "etc/pacman.d/hooks"
     for name in TARGET_DEFERRED_BOOT_HOOKS:
@@ -3857,12 +3885,9 @@ def cleanup_bind_mounts(ctx: InstallContext) -> None:
     ctx.state["bind_mounts"] = []
 
 
-def cleanup_target_hook_masks(ctx: InstallContext) -> None:
-    """Restore the target's deferred boot hooks. Idempotent, and a no-op when
-    nothing was masked, so main()'s finally can call it on any exit path: an
-    interrupt must never leave the installed system with its UKI rebuild hook
-    pointing at /dev/null."""
-    _unmask_mkinitcpio_pacman_hooks(ctx, ctx.target, TARGET_DEFERRED_BOOT_HOOKS)
+def cleanup_hook_masks(ctx: InstallContext) -> None:
+    # Also restore live masks if the package phase failed while setting them up.
+    _unmask_mkinitcpio_pacman_hooks(ctx, root=None)
 
 
 def cleanup_protected_state(ctx: InstallContext) -> None:
@@ -3871,16 +3896,14 @@ def cleanup_protected_state(ctx: InstallContext) -> None:
     Idempotent and safe to call multiple times. Successful protected installs
     intentionally keep the target mounted until reboot.
     """
-    if not ctx.is_protected:
+    target = ctx.state.get("verified_protected_target")
+    if target is None:
         return
 
-    # Swapoff, umount -R, and close of the mappers the mounts were backed by;
-    # shared with the dashboard's pre-reboot release. omarchy_root is named
-    # explicitly because a failure between luksOpen and mount leaves it open
-    # with nothing in the mount table for the release to see. On failure the
-    # script names the holders on stderr; surface that in the install log.
+    # Release only the accepted mount tree. The helper discovers the mappers
+    # backing that tree, so a rejected input cannot name a cleanup target.
     result = subprocess.run(
-        ["omarchy-release-install-target", str(ctx.target), "omarchy_root"],
+        ["omarchy-release-install-target", str(target)],
         check=False,
         capture_output=True,
         text=True,

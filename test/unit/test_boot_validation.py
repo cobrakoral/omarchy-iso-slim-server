@@ -41,9 +41,11 @@ class BootValidationTest(unittest.TestCase):
         self.ctx = types.SimpleNamespace(
             target=self.root, omarchy_install={"storage": {"kernel": "linux-aarch64"}},
             user_configuration={}, encrypt=False, is_protected=False, defer_provisioning=False,
+            state={},
         )
         self.write("boot/limine.conf", LINUX_ENTRY)
         self.write("etc/kernel/cmdline", "root=UUID=test rw\n")
+        self.boot_hook = self.write("etc/pacman.d/hooks/90-mkinitcpio-install.hook", "hook")
         self.write("etc/default/limine", "CUSTOM_UKI_NAME=omarchy\n")
         self.write("etc/limine-entry-tool.d/omarchy-uki.conf", "ENABLE_UKI=yes\n")
         self.write("boot/EFI/limine/limine_x64.efi", "bootloader")
@@ -54,7 +56,6 @@ class BootValidationTest(unittest.TestCase):
         for patch in (
             # The fixtures are x86_64 ones; the Limine binary checked follows the host.
             mock.patch.object(phases.platform, "machine", return_value="x86_64"),
-            mock.patch.object(phases, "_assert_boot_hooks_restored"),
             mock.patch.object(phases.arch, "has_uefi", return_value=True, create=True),
             mock.patch.object(phases, "_read_efibootmgr", return_value={"entries": {"0001": "Limine"}}),
         ):
@@ -73,6 +74,18 @@ class BootValidationTest(unittest.TestCase):
     def test_disabled_uki_accepts_kernel_and_initramfs_without_uki(self):
         self.disable_uki()
         phases.validate_boot(self.ctx)
+
+    def test_boot_validation_restores_only_its_own_hook_mask(self):
+        self.disable_uki()
+        phases._mask_mkinitcpio_pacman_hooks(self.ctx, self.root, phases.TARGET_DEFERRED_BOOT_HOOKS)
+        phases.validate_boot(self.ctx)
+        self.assertEqual(self.boot_hook.read_text(), "hook")
+
+        self.boot_hook.unlink()
+        self.boot_hook.symlink_to("/dev/null")
+        with self.assertRaisesRegex(RuntimeError, "still masked"):
+            phases.validate_boot(self.ctx)
+        self.assertEqual(self.boot_hook.readlink(), Path("/dev/null"))
 
     def test_default_uki_requires_nonempty_uki(self):
         uki = self.write("boot/EFI/Linux/omarchy_linux-aarch64.efi", "UKI")

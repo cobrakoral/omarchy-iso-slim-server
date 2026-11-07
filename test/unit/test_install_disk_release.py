@@ -27,7 +27,7 @@ sys.modules.setdefault(
     types.ModuleType("orchestrator.archinstall_adapter"),
 )
 
-from orchestrator import phases_impl  # noqa: E402
+from orchestrator import phases_impl, server  # noqa: E402
 
 FULL_DISK = {"disk_config": {"device_modifications": [{"device": "/dev/vda", "wipe": True}]}}
 
@@ -93,6 +93,63 @@ class InstallDiskReleaseTest(unittest.TestCase):
         phases_impl.prepare_live(self.ctx())
 
         self.arch.load_arch_config.assert_called_once()
+
+
+    def test_server_checks_media_before_disk_release(self):
+        ctx = self.ctx()
+        ctx.target = self.bin_dir
+        with mock.patch.object(server, "validate"), \
+             mock.patch.object(phases_impl, "verify_root_image_layout"), \
+             mock.patch.object(phases_impl, "verify_install_medium", side_effect=RuntimeError("bad media")), \
+             mock.patch.object(phases_impl, "capture") as disk_command:
+            with self.assertRaisesRegex(RuntimeError, "bad media"):
+                for _, phase in server.build_phases(ctx)[:4]:
+                    phase(ctx)
+        self.arch.load_arch_config.assert_called_once()
+        disk_command.assert_not_called()
+
+    def test_server_parse_error_precedes_disk_release(self):
+        ctx = self.ctx()
+        ctx.target = self.bin_dir
+        self.arch.load_arch_config.side_effect = ValueError("bad config")
+        with mock.patch.object(server, "validate"), mock.patch.object(phases_impl, "capture") as disk_command:
+            with self.assertRaisesRegex(ValueError, "bad config"):
+                for _, phase in server.build_phases(ctx)[:4]:
+                    phase(ctx)
+        disk_command.assert_not_called()
+
+    def test_rejected_target_is_not_cleaned_up(self):
+        ctx = self.ctx()
+        ctx.target = self.bin_dir
+        ctx.is_protected = True
+        hooks = ctx.target / "etc/pacman.d/hooks"
+        hooks.mkdir(parents=True)
+        hook = hooks / phases_impl.TARGET_DEFERRED_BOOT_HOOKS[0]
+        hook.symlink_to("/dev/null")
+        with mock.patch.object(phases_impl.subprocess, "run") as command:
+            phases_impl.cleanup_hook_masks(ctx)
+            phases_impl.cleanup_protected_state(ctx)
+        self.assertEqual(hook.readlink(), Path("/dev/null"))
+        command.assert_not_called()
+
+    def test_cleanup_restores_only_masks_created_in_this_run(self):
+        ctx = self.ctx()
+        hooks = self.bin_dir / "etc/pacman.d/hooks"
+        hooks.mkdir(parents=True)
+        existing = hooks / "existing.hook"
+        existing.symlink_to("/dev/null")
+        original = hooks / "original.hook"
+        original.write_text("original hook")
+        phases_impl._mask_mkinitcpio_pacman_hooks(
+            ctx, self.bin_dir, (existing.name, original.name, "new.hook")
+        )
+        self.assertEqual(original.readlink(), Path("/dev/null"))
+        phases_impl.cleanup_hook_masks(ctx)
+        phases_impl.cleanup_hook_masks(ctx)
+        self.assertEqual(existing.readlink(), Path("/dev/null"))
+        self.assertEqual(original.read_text(), "original hook")
+        self.assertFalse((hooks / "new.hook").is_symlink())
+        self.assertFalse(original.with_suffix(".hook.omarchy-backup").exists())
 
 
 if __name__ == "__main__":

@@ -2,6 +2,13 @@
 
 set -e
 
+# Edition dispatch happens before desktop cache or package handling.
+case ${OMARCHY_EDITION:-desktop} in
+  desktop) ;;
+  server) exec "${BASH_SOURCE[0]%/*}/omarchy-iso-server-make" "$@" ;;
+  *) echo "Unsupported OMARCHY_EDITION" >&2; exit 2 ;;
+esac
+
 NO_CACHE=""
 KEEP_PKG_CACHE=""
 LOCAL_OMARCHY_PATH=""

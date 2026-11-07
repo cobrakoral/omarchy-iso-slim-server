@@ -11,6 +11,7 @@ archinstall's import-time CLI parsing from seeing Omarchy-specific flags.
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from .context import InstallContext
 from .phases import PhaseError, run
 from .ui import error, info
@@ -29,6 +30,11 @@ def build_phases(ctx: InstallContext):
     create/mount the layout, while protected provides an already-mounted target
     and the partition details Omarchy needs for boot/fstab generation.
     """
+    marker = Path("/etc/omarchy-edition")
+    if marker.is_file() and marker.read_text().strip() == "server":
+        from .server import build_phases as server_phases
+        return server_phases(ctx)
+
     from .phases_impl import (
         prepare_live,
         prepare_install_target,
@@ -85,7 +91,7 @@ def main() -> int:
         boost_cpu_governor,
         cleanup_bind_mounts,
         cleanup_protected_state,
-        cleanup_target_hook_masks,
+        cleanup_hook_masks,
         restore_cpu_governors,
         stop_target_keyring_init,
     )
@@ -112,7 +118,7 @@ def main() -> int:
         # on a failure it ends the unit before the target is torn down.
         stop_target_keyring_init(ctx)
         cleanup_bind_mounts(ctx)
-        cleanup_target_hook_masks(ctx)
+        cleanup_hook_masks(ctx)
         if not success:
             cleanup_protected_state(ctx)
 

@@ -28,13 +28,25 @@ if [[ ${1:-} == --protected ]]; then
   exit 0
 fi
 
-disk="${1:-}"
-[[ -n $disk && -b $disk ]] || { echo "Need a block device argument; got '$disk'" >&2; exit 1; }
-disk=$(realpath "$disk")
+disk_seq=
+if [[ ${1:-} == --disk-seq ]]; then
+  if [[ $# -ne 3 || ! ${2:-} =~ ^[1-9][0-9]*$ ]]; then
+    echo "Usage: $0 --disk-seq <positive sequence> <disk>" >&2
+    exit 1
+  fi
+  disk_seq=$2
+  shift 2
+fi
+
+disk=${1:-}
+[[ $# -eq 1 && -b $disk ]] || { echo "Need a block device argument; got '$disk'" >&2; exit 1; }
+disk=$(realpath -- "$disk") || exit 1
 disk_name=$(basename "$disk")
 
 echo "Cleaning up existing holders on install disk: $disk"
-findmnt -R /mnt >/dev/null && umount -R /mnt || true
+if [[ -z $disk_seq ]]; then
+  findmnt -R /mnt >/dev/null && umount -R /mnt || true
+fi
 
 # Kernel names (sda2, nvme0n1p2) of the disk's partitions.
 partitions() {
@@ -54,10 +66,30 @@ dev_path() {
 }
 
 unuse() {
+  if [[ -n $disk_seq ]]; then
+    return 0
+  fi
   swapoff "$1" 2>/dev/null || true
   while read -r target; do
     [[ -n $target ]] && umount "$target" 2>/dev/null || true
   done < <(findmnt -rn -S "$1" -o TARGET 2>/dev/null || true)
+}
+
+guard_server_disk() {
+  [[ -n $disk_seq ]] || return 0
+  local current_seq mounts
+  if ! current_seq=$(blockdev --getdiskseq "$disk") || [[ $current_seq != "$disk_seq" ]]; then
+    echo "Installation disk identity changed or could not be verified: $disk"
+    exit 1
+  fi
+  if ! mounts=$(lsblk -rn -o MOUNTPOINTS -- "$disk"); then
+    echo "Could not check installation disk mounts and swap: $disk"
+    exit 1
+  fi
+  if [[ $mounts =~ [^[:space:]] ]]; then
+    echo "Installation disk or its descendant is mounted or active swap: $disk"
+    exit 1
+  fi
 }
 
 # Take down everything stacked on a device, holders first, so LVM on LUKS on
@@ -80,6 +112,7 @@ release_holders() {
     release_holders "$name"
     dev=$(dev_path "$name")
     unuse "$dev"
+    guard_server_disk
     case $name in
       dm-*) echo "Removing $dev"; dmsetup remove --retry "$dev" || true ;;
       md*) echo "Stopping $dev"; mdadm --stop "$dev" || true ;;
@@ -89,6 +122,7 @@ release_holders() {
 
 release_and_wipe() {
   local part
+  guard_server_disk
   unuse "$disk"
   release_holders "$disk_name"
 
@@ -96,8 +130,10 @@ release_and_wipe() {
   # back when the table is re-read. The disk's own signatures go too (an md 0.90
   # member keeps its superblock near the end), all but the partition table.
   for part in $(partitions); do
+    guard_server_disk
     wipefs --all --force "/dev/$part" >/dev/null || true
   done
+  guard_server_disk
   wipefs --all --force --types nogpt,PMBR,dos "$disk" >/dev/null || true
   blockdev --flushbufs "$disk" 2>/dev/null || true
   blockdev --rereadpt "$disk" 2>/dev/null
@@ -109,8 +145,8 @@ release_and_wipe() {
 released=false
 for attempt in 1 2 3 4 5; do
   udevadm settle 2>/dev/null || true
-  exec {lock}<"$disk"
-  flock -x "$lock"
+  exec {lock}<"$disk" || exit 1
+  flock -x "$lock" || exit 1
   release_and_wipe && released=true
   exec {lock}<&-
   $released && break
