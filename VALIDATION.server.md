@@ -885,3 +885,64 @@ after qualification are not represented as inputs to this ISO.
 
 These are QEMU/KVM qualification results, not hardware/Proxmox qualification.
 Secure Boot and public IPv6 deployment remain deferred.
+
+## Successful installer-secret cleanup and fail-safe acceptance — 2026-11-08 test3
+
+The hardened **test3** release supersedes test2. Production source was modified
+only in the live server installer wrapper, not in the signed installed runtime
+package. Review verified the following independent GPG-signed commits:
+
+- `a2a3880818a6552bd810b40cae6ceef0232ea1f6` — remove live-only
+  credential/validated JSON after successful orchestration; refuse reboot or
+  completion on cleanup failure; keep failed inputs for explicit retry;
+  prevent a successful live console from relaunching the installer; treat a
+  declined reboot as a normal successful exit.
+- `5c18b8dae363da29e191eb0e036dfd85f9135f56` — make all remaining
+  ACPI, interactive, installed-channel and repository acceptance checks
+  explicit runtime exceptions rather than Python optimization-sensitive
+  assertions. No acceptance test depends on a side effect inside `assert`.
+- `03acd37d08863ad774f1ce6ccc9ebc2c320277cf` — document independent
+  checkout/build against the public `server-packages` channel, current
+  `omarchy-server 0.2.0-3`, and installer credential lifecycle.
+
+VM-free regressions: pinned upstream **388 tests (3 skipped)** and seven
+server suites **150 tests**. The critical suite was also run under both
+`PYTHONOPTIMIZE=1` and `PYTHONOPTIMIZE=2`. New isolated Bash fixtures exercised
+successful cleanup and post-success idempotence; failure preserving inputs;
+subsequent safe retry; automatic or confirmed reboot; declined reboot; and
+cleanup failures refusing a completion marker/reboot. Fixtures used synthetic
+paths and credentials; attached input media was not modified.
+
+A new unseeded build and complete release qualifier ran against exact signed
+source `03acd37d08863ad774f1ce6ccc9ebc2c320277cf`, the pinned clean
+archiso submodule and the **public, signed GitHub package channel** (not a
+local test candidate). The qualifier exited **0** with
+`SERVER_FRESH_RELEASE_ACCEPTANCE_PASS`. Its evidence is under the retained
+private working directory `.server-work/release-20261108-164158`; the public
+release contains only sanitized accepted evidence, not raw credential or SSH
+transcripts.
+
+- Output: `release/server-hardened-20261108-164158`.
+- ISO: `omarchy-slim-server-unofficial-2026.11.08-x86_64.iso`.
+- Bytes: **1,255,964,672**.
+- SHA-256: `32f34f2fa651e7c17c1d567d2998e6c250f40e5b1a571b1979edf91c70dd9015`.
+- Four fresh install modes: base UEFI; UEFI cloud-init; BIOS; encrypted UEFI.
+  All passed and were compacted; their stored hashes and receipts were
+  independently rechecked against all four retained guest disks.
+- Interactive Gum installer, password/SSH login, live/installed/cold-boot ACPI,
+  negative control, signed update/snapshot/reboot, installed repository trust
+  (176 base/203 cloud packages), and snapshot boot/restore/reboot all passed.
+- Independent GPG verification passed for the ISO, `SHA256SUMS`, and the
+  aggregate acceptance JSON. The pinned maintainer public key is included,
+  with primary fingerprint
+  `7C5C6FEB40A5B493007FAA3650B1EB533F640140`.
+- Exact signed annotated tag: `slim-server-2026.11.08-test3`, pointing to
+  the qualified `03acd37d08863ad774f1ce6ccc9ebc2c320277cf` source.
+- Release assets: exactly seven public files (ISO, ISO detached signature,
+  `SHA256SUMS`, manifest signature, public signing key, accepted JSON, its
+  detached signature). Test2 was marked superseded, retaining its original
+  historical assets and signed tag.
+
+The documentation-only checkpoint following release is **not** part of the
+qualified ISO source. Physical hardware, Proxmox, Secure Boot and public IPv6
+routing remain unverified; this is an unofficial community test image.

@@ -36,7 +36,7 @@ OMARCHY_EDITION=server bin/omarchy-iso-make --empty-cache --no-boot-offer
 ```
 
 The currently published `server-packages` channel provides the signed
-`omarchy-server 0.2.0-3` runtime used by the qualified 2026.11.08 `test2` ISO.
+`omarchy-server 0.2.0-3` runtime used by the qualified 2026.11.08 `test3` ISO.
 Older versioned package archives are retained for historical installations;
 Pacman resolves the current version from the signed repository database.
 A normal source build **does not require a private signing key** when using
@@ -168,9 +168,11 @@ digest also does not freeze later package downloads.
 
 ## Current release and signed updates
 
-The latest qualified and published 2026.11.08 `test2` ISO includes the
+The latest qualified and published 2026.11.08 `test3` ISO includes the
 fail-closed disk-signature cleanup, installer preflight and update recovery,
-plus the explicit virtual power-button policy. It uses signed
+live-only credential cleanup after successful installation, and an explicit
+virtual power-button policy. Its release tests remain active under optimized
+Python. It uses signed
 **omarchy-server 0.2.0-3**, **omarchy-server-keyring 20261031-1**, and
 **limine-snapper-sync-server 1.32.1-3** packages.
 The snapshot core still comes from the pinned official 1.32.1-2 archive;
