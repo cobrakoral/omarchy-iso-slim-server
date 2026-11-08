@@ -762,3 +762,63 @@ case boundary. No prior ISO, signed repository, accepted disk, build cache or
 release evidence was discarded. The historical November 7 ISO does not
 qualify these later source changes, and no new ISO or final acceptance JSON
 was produced. Secure Boot and public IPv6 deployment remain deferred.
+
+## Fresh signed 0.2.0-3 ISO release qualification — 2026-11-08
+
+Following removal of the disposable historical build, release, and test-run
+workspaces, free VM disk space increased to about 56 GiB. The clean, signed
+production/harness source was `bdfa23c58407b4c8f6bfa5e93e38044e7e262e0e`.
+This documentation record is made **after** qualification; it is not an input
+to the qualified ISO. The generated source and acceptance revisions are kept
+explicitly distinct from any later documentation-only commit.
+
+The prior published signed channel supplied unchanged immutable
+`omarchy-server-keyring 20261031-1` and
+`limine-snapper-sync-server 1.32.1-3` packages. The official snapshot archive
+passed its pinned hash and upstream signature check. The runtime package was
+rebuilt and signed as `omarchy-server 0.2.0-3`; the reconstructed local channel
+passed source-file, signed repository/database, and package verification. It
+was **not published**. Local candidate:
+`.server-work/candidate-20261108/stable/x86_64`.
+
+- Fresh output: `release/server-fresh-20261108-094128/`.
+- ISO: `omarchy-slim-server-unofficial-2026.11.08-x86_64.iso`.
+- Size: **1,255,964,672 bytes**.
+- ISO SHA-256: `6b3828edeec6c9f6f45c53529d26fd2016c8facf0a1b0cb6ff6596a7fac93ef8`.
+- Fresh empty-cache build and qualification source:
+  `bdfa23c58407b4c8f6bfa5e93e38044e7e262e0e` (clean).
+- Upstream regression source: `84782475aeb885c8d05f9e85b6ad0f1a0add60e5`.
+- Package closure: **176 base / 203 with cloud-init** (27 cloud delta).
+- Immutable container digest is recorded in `server-build-inputs.json`.
+
+The automated qualifier finished successfully and wrote
+`server-release-acceptance.json` with `passed: true`. Fresh offline
+installations passed **base UEFI, cloud-init UEFI, BIOS, and encrypted UEFI**
+with exact package-version maps. Each tested stopped disk retained its original
+SHA-256 in the acceptance record and a verified, content-preserving compaction
+receipt. Delivered interactive Gum installation and SSH/password-login checks
+passed. Live ISO and installed ACPI poweroff, cold-boot poweroff, the conflicting
+ignore-policy negative control and recovered normal shutdown all passed.
+
+The signed disposable upgrade fixture passed installed signature checks,
+snapshot retention and healthy reboot. Installed channel trust passed in both
+base and cloud guests, followed by actual snapshot recovery, restored-system
+health and a final installed-channel trust verification. The fresh qualification
+ran the upstream regression suite **388 tests (385 passed, 3 skipped)** and
+all **134 server tests** in seven suites. `SHA256SUMS` and the final ISO SHA-256
+were independently rechecked. The completed acceptance JSON also passed
+independent checks of its source identity, ISO digest and four compaction disk
+digests.
+
+After acceptance, the maintainer locally signed the ISO (`.iso.sig`),
+`SHA256SUMS` (`SHA256SUMS.asc`) and the acceptance record
+(`server-release-acceptance.json.asc`) with the pinned Ed25519 signing identity.
+All three detached signatures verified, including the pinned primary fingerprint
+`7C5C6FEB40A5B493007FAA3650B1EB533F640140`.
+`UNOFFICIAL-SIGNING-KEY.asc` contains the public key. Private keys and raw
+credential-bearing VM transcripts remain outside the release directory.
+
+This is complete virtual release qualification, **not** a guarantee of
+byte-identical rebuilds or hardware qualification. Public IPv6 deployment and
+Secure Boot remain deferred. No fork package publication, PR or GitHub push
+was performed.
