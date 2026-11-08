@@ -39,10 +39,12 @@ def main():
 
     def poweroff(vm, case):
         began = time.monotonic()
-        assert "return" in qmp(vm.qmp, "system_powerdown")
+        if "return" not in qmp(vm.qmp, "system_powerdown"):
+            raise RuntimeError(f"QMP rejected ACPI poweroff for {case}")
         vm.child.expect(pexpect.EOF, timeout=90)
         vm.log.flush()
-        assert "reboot: Power down" in Path(vm.log.name).read_text(errors="replace")
+        if "reboot: Power down" not in Path(vm.log.name).read_text(errors="replace"):
+            raise RuntimeError(f"Guest did not log orderly ACPI shutdown for {case}")
         elapsed = time.monotonic() - began
         records.append(dict(case=case, orderly_acpi_poweroff=True, seconds=elapsed))
         print("ACPI_POWEROFF_PASS", case, round(elapsed, 2), flush=True)
@@ -68,23 +70,31 @@ def main():
         vm = VM(directory, disk, args.port, [])
         try:
             vm.wait_ssh()
-            assert vm.sudo(PROPERTY).strip() == 's "poweroff"'
-            assert vm.sudo("sha256sum /" + POLICY).split()[0] == expected
+            if vm.sudo(PROPERTY).strip() != 's "poweroff"':
+                raise RuntimeError("Installed guest power-button policy is not poweroff")
+            if vm.sudo("sha256sum /" + POLICY).split()[0] != expected:
+                raise RuntimeError("Installed power-button policy differs from signed source")
             if boot == "negative-control-restored":
                 vm.sudo("printf '[Login]\\nHandlePowerKey=ignore\\n' > /etc/systemd/logind.conf.d/99-acpi-test-ignore.conf; systemctl reload systemd-logind")
-                assert vm.sudo(PROPERTY).strip() == 's "ignore"'
-                assert "return" in qmp(vm.qmp, "system_powerdown")
+                if vm.sudo(PROPERTY).strip() != 's "ignore"':
+                    raise RuntimeError("ACPI negative-control override was not applied")
+                if "return" not in qmp(vm.qmp, "system_powerdown"):
+                    raise RuntimeError("QMP rejected the negative-control ACPI event")
                 time.sleep(2)
-                assert vm.child.isalive() and vm.ssh("true").returncode == 0
+                if not vm.child.isalive() or vm.ssh("true").returncode != 0:
+                    raise RuntimeError("ACPI negative control unexpectedly shut down the guest")
                 print("CONFLICTING_IGNORE_NEGATIVE_CONTROL_PASS", flush=True)
                 vm.sudo("rm /etc/systemd/logind.conf.d/99-acpi-test-ignore.conf; systemctl reload systemd-logind")
-                assert vm.sudo(PROPERTY).strip() == 's "poweroff"'
+                if vm.sudo(PROPERTY).strip() != 's "poweroff"':
+                    raise RuntimeError("Power-button policy was not restored after negative control")
             poweroff(vm, boot)
         finally:
             vm.stop()
-    assert sha(base / "system.qcow2") == original
+    if sha(base / "system.qcow2") != original:
+        raise RuntimeError("Accepted base disk changed during ACPI acceptance")
     if args.iso:
-        assert sha(args.iso) == receipt["iso_sha256"]
+        if sha(args.iso) != receipt["iso_sha256"]:
+            raise RuntimeError("Original ISO changed during ACPI acceptance")
     record = dict(passed=True, base=str(base), base_disk_sha256=original,
                   iso_sha256=receipt["iso_sha256"], policy_sha256=expected,
                   negative_control="ignore kept guest running after ACPI event",

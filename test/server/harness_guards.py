@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Protect accepted disk graphs, source provenance and seed-media identity."""
+import ast
 import fcntl
 import hashlib
 import importlib.util
@@ -283,6 +284,31 @@ class RepositoryFileTests(unittest.TestCase):
         self.signature.assert_any_call(archive)
         self.assertIn(archive, approved)
         self.assertIn(signature, approved)
+
+
+class ReleaseCriticalChecksTests(unittest.TestCase):
+    """Optimization must not remove acceptance checks or their side effects."""
+
+    def test_no_release_critical_asserts_even_under_python_optimization(self):
+        for relative in ("acpi.py", "console.py", "installed_repository.py", "repository.py"):
+            with self.subTest(file=relative):
+                path = ROOT / "test/server" / relative
+                tree = ast.parse(path.read_text(), filename=str(path))
+                self.assertFalse(any(isinstance(n, ast.Assert) for n in ast.walk(tree)))
+                compile(path.read_text(), str(path), "exec", optimize=2)
+
+    def test_acpi_qmp_command_survives_optimized_bytecode(self):
+        path = ROOT / "test/server/acpi.py"
+        tree = ast.parse(path.read_text())
+        main = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main")
+        poweroff = next(n for n in main.body if isinstance(n, ast.FunctionDef) and n.name == "poweroff")
+        unit = ast.fix_missing_locations(ast.Module(body=[poweroff], type_ignores=[]))
+        for level in (0, 1, 2):
+            with self.subTest(optimization=level):
+                code = compile(unit, str(path), "exec", optimize=level)
+                closure = next(c for c in code.co_consts if isinstance(c, type(code)))
+                self.assertIn("qmp", closure.co_names)
+
 
 if __name__ == "__main__":
     unittest.main()

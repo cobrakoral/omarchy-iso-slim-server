@@ -292,7 +292,8 @@ test "$(grep -o applied /var/log/shared-migration-invocations | wc -l)" = 2
 test ! -e /etc/desktop-migration-was-run
 """)
             first = health(vm)
-            assert first["packages"] == 176, first
+            if first["packages"] != 176:
+                raise RuntimeError(f"Unexpected installed package count: {first}")
             (directory / "health.json").write_text(json.dumps(first, indent=2))
         finally:
             if vm:
@@ -300,7 +301,8 @@ test ! -e /etc/desktop-migration-was-run
         vm = boot()
         try:
             second = health(vm)
-            assert second["packages"] == 176, second
+            if second["packages"] != 176:
+                raise RuntimeError(f"Unexpected cold-boot package count: {second}")
             (directory / "cold-boot.json").write_text(json.dumps(second, indent=2))
         finally:
             vm.stop()

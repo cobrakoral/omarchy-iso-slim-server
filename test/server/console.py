@@ -103,7 +103,8 @@ def main():
             "Gum wizard, unencrypted install, default no cloud-init, console password login, password SSH fallback: PASS\n"
         )
         with opts.iso.open("rb") as stream:
-            assert hashlib.file_digest(stream, "sha256").hexdigest() == iso_hash
+            if hashlib.file_digest(stream, "sha256").hexdigest() != iso_hash:
+                raise RuntimeError("Installer ISO changed during interactive acceptance")
         (directory / "console-pass.json").write_text(json.dumps(dict(
             passed=True, iso_sha256=iso_hash, source_revision=source,
             harness_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),

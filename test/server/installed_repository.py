@@ -149,7 +149,8 @@ test ! -e /var/lib/omarchy-server/migrations/pending.json
             expected_packages,
             "after reboot",
         )
-        assert before["packages"] == after["packages"] == len(expected_packages)
+        if before["packages"] != after["packages"] or after["packages"] != len(expected_packages):
+            raise RuntimeError("Installed package count changed across repository-trust reboot")
     finally:
         vm.stop()
     record = {
