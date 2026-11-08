@@ -822,3 +822,66 @@ This is complete virtual release qualification, **not** a guarantee of
 byte-identical rebuilds or hardware qualification. Public IPv6 deployment and
 Secure Boot remain deferred. No fork package publication, PR or GitHub push
 was performed.
+
+## Disk-safety hardening and public-channel release qualification — 2026-11-08
+
+The previous signed community test image (`slim-server-2026.11.08-test1`)
+completed functional QEMU acceptance, but code review reproduced an installer
+cleanup failure path: `wipefs` errors could be ignored if the later partition
+reread succeeded. This **superseding release** fails closed on both partition
+and whole-disk signature-wipe failures. It adds isolated failure-injection tests
+without touching actual devices. The release harness now uses explicit integrity
+exceptions instead of optimization-removable `assert` checks; QEMU's SSH-port
+lock, control directory and log resources are released on all constructor
+failure paths, including failures before QEMU process creation.
+
+The three implementation commits are individually GPG signed:
+
+- `fc98efd610c911628cb2e10db966a5d603800756` — disk signature failure gate;
+- `f10fb31b07172c2cb8d115fc8eeef56df160d6ff` — qualification guard;
+- `b50eec605aa75099f7f0f8d2a3b647cfc4860d97` — QEMU constructor cleanup.
+
+The independent, signed public `server-packages` channel was advanced by
+`6f84662d413bbbee38739c24c0cc3c08841f74df`, publishing
+`omarchy-server 0.2.0-3` and retaining both the previous `0.2.0-1` package
+and other immutable historical archives. The new qualifier obtained and
+verified this **public GitHub channel**, not an injected local candidate.
+
+The full qualification used a new empty-cache build, clean source commit
+`b50eec605aa75099f7f0f8d2a3b647cfc4860d97`, and pinned upstream runtime
+`84782475aeb885c8d05f9e85b6ad0f1a0add60e5`.
+The upstream suite reported **388 tests, 3 skipped**; the seven server
+regression suites reported **143 tests passed**, including new cleanup,
+optimized-Python and constructor-failure cases.
+
+Release output: `release/server-fixed-20261108-143658/`.
+
+- ISO: `omarchy-slim-server-unofficial-2026.11.08-x86_64.iso`;
+- Size: **1,255,964,672 bytes**;
+- SHA-256: `3707183a3fec121ada38625fa9ca2fffc7fb1ff2510bec09349a498d00f2fa35`;
+- Acceptance: `server-release-acceptance.json` (`passed: true`, `resumed: true`);
+- Installation closures: 176 base packages, 203 with cloud-init;
+- Fresh guest cases: UEFI base, UEFI cloud, BIOS and LUKS, each with checked
+  original and compacted disk digests;
+- Additional acceptance: interactive Gum wizard, ACPI with negative control,
+  signed update and retained snapshot, installed base/cloud package trust,
+  real snapshot boot/restore and healthy reboot.
+
+The first cloud guest completed its cloud-init boot and initially accepted SSH,
+but a subsequent SSH handshake timed out and failed the harness. The
+failure remained in its private test-run evidence; it was **not** counted as a
+pass. Evidence-bound `--resume-work` verified the unchanged ISO/build source,
+reused the accepted base disk and reran the cloud installation in a **new**
+disposable VM. That fresh cloud case and all remaining cases passed. The
+complete release harness exited 0 with `SERVER_FRESH_RELEASE_ACCEPTANCE_PASS`.
+
+The final ISO SHA-256, manifest, signed channel and four compacted disk digests
+were independently reverified. New detached Ed25519 signatures cover the ISO,
+`SHA256SUMS` and `server-release-acceptance.json`, using pinned primary
+fingerprint `7C5C6FEB40A5B493007FAA3650B1EB533F640140`. Every detached
+signature verified. Credentials, raw SSH/session transcripts, test-disks and
+private signing material remain outside release assets. Documentation commits
+after qualification are not represented as inputs to this ISO.
+
+These are QEMU/KVM qualification results, not hardware/Proxmox qualification.
+Secure Boot and public IPv6 deployment remain deferred.
