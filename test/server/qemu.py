@@ -173,73 +173,79 @@ class VM:
         except OSError as error:
             self.port_guard.close()
             raise ValueError(f"Refusing busy guest SSH port {port}") from error
-        vars = directory / "OVMF_VARS.fd"
-        if not vars.exists():
-            shutil.copy("/usr/share/edk2/x64/OVMF_VARS.4m.fd", vars)
-        # UNIX socket paths are limited to 107 bytes. Evidence directories can
-        # be longer (especially BIOS/encrypted fault cases), so keep the socket
-        # in a short private directory without shortening the evidence path.
-        self.control = tempfile.TemporaryDirectory(prefix="omarchy-qmp-")
-        self.qmp = Path(self.control.name) / "qmp.sock"
-        args = [
-            "-enable-kvm",
-            "-cpu",
-            "host",
-            "-m",
-            "1536",
-            "-smp",
-            "2",
-            "-display",
-            "none",
-            "-serial",
-            "stdio",
-            "-monitor",
-            "none",
-            "-drive",
-            "if=pflash,format=raw,readonly=on,file=/usr/share/edk2/x64/OVMF_CODE.4m.fd",
-            "-drive",
-            f"if=pflash,format=raw,file={vars}",
-            "-drive",
-            f"if=virtio,format=qcow2,file={disk}"
-            + (",discard=unmap,detect-zeroes=unmap" if sparse_zeros else ""),
-            "-qmp",
-            f"unix:{self.qmp},server=on,wait=off",
-            "-no-reboot",
-        ]
-        if networks is None:
-            # Existing offline acceptance keeps its egress-blocked single NIC.
-            args += [
-                "-netdev",
-                f"user,id=net0,restrict=on,hostfwd=tcp:127.0.0.1:{port}-:22",
-                "-device",
-                "virtio-net-pci,netdev=net0",
-            ]
-        else:
-            if not networks:
-                raise ValueError("A guest needs a management NIC")
-            for index, network in enumerate(networks):
-                args += network.arguments(index, port if index == 0 else None)
-        if bios:
-            index = (
-                args.index(
-                    "if=pflash,format=raw,readonly=on,file=/usr/share/edk2/x64/OVMF_CODE.4m.fd"
-                )
-                - 1
-            )
-            del args[index : index + 4]
-        for i, cd in enumerate(media):
-            args += ["-drive", f"file={cd},media=cdrom,readonly=on,index={i+2}"]
-        if share is not None:
-            args += [
-                "-fsdev",
-                f"local,id=packages,path={share},security_model=none,readonly=on",
-                "-device",
-                "virtio-9p-pci,fsdev=packages,mount_tag=packages,addr=0x9",
-            ]
-        if installer:
-            args += ["-boot", "order=d"]
-        self.log = (directory / f"serial-{time.time_ns()}.log").open("w")
+        # Once the exclusive SSH-port lock is acquired, every subsequent
+        # initializer step needs the same exception-safe cleanup as spawn().
+        # An exception traceback can keep this partially built VM alive.
+        self.control = None
+        self.log = None
+        self.child = None
         try:
+            vars = directory / "OVMF_VARS.fd"
+            if not vars.exists():
+                shutil.copy("/usr/share/edk2/x64/OVMF_VARS.4m.fd", vars)
+            # UNIX socket paths are limited to 107 bytes. Evidence directories can
+            # be longer (especially BIOS/encrypted fault cases), so keep the socket
+            # in a short private directory without shortening the evidence path.
+            self.control = tempfile.TemporaryDirectory(prefix="omarchy-qmp-")
+            self.qmp = Path(self.control.name) / "qmp.sock"
+            args = [
+                "-enable-kvm",
+                "-cpu",
+                "host",
+                "-m",
+                "1536",
+                "-smp",
+                "2",
+                "-display",
+                "none",
+                "-serial",
+                "stdio",
+                "-monitor",
+                "none",
+                "-drive",
+                "if=pflash,format=raw,readonly=on,file=/usr/share/edk2/x64/OVMF_CODE.4m.fd",
+                "-drive",
+                f"if=pflash,format=raw,file={vars}",
+                "-drive",
+                f"if=virtio,format=qcow2,file={disk}"
+                + (",discard=unmap,detect-zeroes=unmap" if sparse_zeros else ""),
+                "-qmp",
+                f"unix:{self.qmp},server=on,wait=off",
+                "-no-reboot",
+            ]
+            if networks is None:
+                # Existing offline acceptance keeps its egress-blocked single NIC.
+                args += [
+                    "-netdev",
+                    f"user,id=net0,restrict=on,hostfwd=tcp:127.0.0.1:{port}-:22",
+                    "-device",
+                    "virtio-net-pci,netdev=net0",
+                ]
+            else:
+                if not networks:
+                    raise ValueError("A guest needs a management NIC")
+                for index, network in enumerate(networks):
+                    args += network.arguments(index, port if index == 0 else None)
+            if bios:
+                index = (
+                    args.index(
+                        "if=pflash,format=raw,readonly=on,file=/usr/share/edk2/x64/OVMF_CODE.4m.fd"
+                    )
+                    - 1
+                )
+                del args[index : index + 4]
+            for i, cd in enumerate(media):
+                args += ["-drive", f"file={cd},media=cdrom,readonly=on,index={i+2}"]
+            if share is not None:
+                args += [
+                    "-fsdev",
+                    f"local,id=packages,path={share},security_model=none,readonly=on",
+                    "-device",
+                    "virtio-9p-pci,fsdev=packages,mount_tag=packages,addr=0x9",
+                ]
+            if installer:
+                args += ["-boot", "order=d"]
+            self.log = (directory / f"serial-{time.time_ns()}.log").open("w")
             self.child = pexpect.spawn(
                 "qemu-system-x86_64",
                 args,
@@ -249,13 +255,13 @@ class VM:
             )
             self.child.logfile = self.log
         except BaseException:
-            # Startup failed before the caller could use stop(). Release all
-            # resources even if the exception is retained or one close fails.
             with ExitStack() as cleanup:
                 cleanup.callback(self.port_guard.close)
-                cleanup.callback(self.control.cleanup)
-                cleanup.callback(self.log.close)
-                if hasattr(self, "child"):
+                if self.control is not None:
+                    cleanup.callback(self.control.cleanup)
+                if self.log is not None:
+                    cleanup.callback(self.log.close)
+                if self.child is not None:
                     cleanup.callback(self.child.close, force=True)
             raise
 
