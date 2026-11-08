@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Verify deployed server boot artifacts against the installed kernel."""
 
+import argparse
 import hashlib
+import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -79,10 +82,34 @@ def verify(root, efi):
     return release
 
 
+def check_mount():
+    def find_mount(*args):
+        result = subprocess.run(
+            ["findmnt", "--raw", "--noheadings", "--mountpoint", "/boot", *args],
+            text=True,
+            capture_output=True,
+        )
+        return result.stdout.splitlines() if result.returncode == 0 else []
+
+    sources = find_mount("--fstab", "--evaluate", "--output", "SOURCE")
+    if len(sources) != 1 or not sources[0].startswith("/dev/"):
+        raise ValueError("Expected one configured block device for /boot in /etc/fstab")
+    device = Path(sources[0]).stat()
+    if not stat.S_ISBLK(device.st_mode):
+        raise ValueError(f"Configured /boot source is not a block device: {sources[0]}")
+    expected = f"{os.major(device.st_rdev)}:{os.minor(device.st_rdev)}"
+    if find_mount("--kernel", "--output", "MAJ:MIN,FSROOT") != [f"{expected} /"]:
+        raise ValueError(f"/boot must be mounted from its configured device: {sources[0]}")
+
+
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--check-mount", action="store_true", help="verify only the /boot mount")
+    args = parser.parse_args()
     try:
-        if subprocess.run(["mountpoint", "-q", "/boot"]).returncode:
-            raise ValueError("/boot must be mounted before checking boot artifacts")
+        check_mount()
+        if args.check_mount:
+            return 0
         release = verify(Path("/"), Path("/sys/firmware/efi").is_dir())
     except Exception as error:
         print(f"Boot verification failed: {error}", file=sys.stderr)

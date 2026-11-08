@@ -3,8 +3,12 @@
 
 from importlib.machinery import SourceFileLoader
 import importlib.util
+import os
 from pathlib import Path
+import stat
+import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -35,6 +39,29 @@ class BootCheckTests(unittest.TestCase):
             ".linux": b"installed kernel",
             ".initrd": b"initramfs",
         }
+
+    def test_boot_mount_must_match_configured_partition(self):
+        device = SimpleNamespace(st_mode=stat.S_IFBLK, st_rdev=os.makedev(254, 1))
+        for mounted, matches in (
+            ("254:1 /\n", True),
+            ("254:2 /\n", False),
+            ("254:1 /elsewhere\n", False),
+            ("254:1 /\n254:2 /\n", False),
+        ):
+            replies = [
+                subprocess.CompletedProcess([], 0, "/dev/disk/by-uuid/boot\n"),
+                subprocess.CompletedProcess([], 0, mounted),
+            ]
+            with (
+                self.subTest(mounted=mounted),
+                patch.object(check.subprocess, "run", side_effect=replies),
+                patch.object(Path, "stat", return_value=device),
+            ):
+                if matches:
+                    check.check_mount()
+                else:
+                    with self.assertRaisesRegex(ValueError, "configured device"):
+                        check.check_mount()
 
     def test_valid_uki(self):
         with patch.object(
@@ -86,10 +113,16 @@ class BootCheckTests(unittest.TestCase):
             check.verify(self.root, False)
 
     def test_missing_boot_mount_fails(self):
-        with patch.object(check.subprocess, "run") as run, patch.object(
-            check, "verify"
-        ) as verify:
-            run.return_value.returncode = 1
+        device = SimpleNamespace(st_mode=stat.S_IFBLK, st_rdev=os.makedev(254, 1))
+        replies = [
+            subprocess.CompletedProcess([], 0, "/dev/disk/by-uuid/boot\n"),
+            subprocess.CompletedProcess([], 1, ""),
+        ]
+        with (
+            patch.object(check.subprocess, "run", side_effect=replies),
+            patch.object(Path, "stat", return_value=device),
+            patch.object(check, "verify") as verify,
+        ):
             self.assertEqual(check.main(), 1)
             verify.assert_not_called()
 

@@ -66,6 +66,9 @@ def validate(ctx):
     if type(disk_seq) is not int or disk_seq <= 0:
         raise ValueError("Installation disk requires a positive kernel disk sequence number")
 
+    if "disk_seq" in answers and answers["disk_seq"] != disk_seq:
+        raise ValueError("Installation disk sequence changed since selection")
+
     answers["disk"] = disk
     expected, credentials = make_config(answers, int(selected_disk["size"]), reserved)
     if set(conf) - set(expected):

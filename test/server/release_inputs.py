@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Regressions for preserving immutable outputs and truthful cold-cache inputs."""
 
+import errno
 import importlib.util
 import json
 from pathlib import Path
@@ -108,6 +109,41 @@ class BuildInputsTests(unittest.TestCase):
         record = self.prepare(empty_cache=False)
         self.assertTrue(record["legacy_cache_seeded"])
         self.assertEqual(old.stat().st_ino, (self.cache / "mirror/a.pkg").stat().st_ino)
+
+    def test_warm_generation_copies_across_filesystems(self):
+        legacy = self.root / ".server-work/cache/mirror"
+        legacy.mkdir(parents=True)
+        (legacy / "a.pkg").write_bytes(b"archive")
+        with patch.object(inputs.os, "link", side_effect=OSError(errno.EXDEV, "cross-device")):
+            record = self.prepare(empty_cache=False)
+        self.assertTrue(record["legacy_cache_seeded"])
+        self.assertEqual((self.cache / "mirror/a.pkg").read_bytes(), b"archive")
+
+    def test_checks_destination_filesystems_before_reserving_paths(self):
+        self.out.mkdir()
+        self.cache.mkdir()
+        real_stat = Path.stat
+
+        def distinct_filesystems(path, **kwargs):
+            result = real_stat(path, **kwargs)
+            if path == self.cache:
+                fields = list(result)
+                fields[2] += 1
+                return inputs.os.stat_result(fields)
+            return result
+
+        def space(path):
+            self.assertIn(path, (self.out, self.cache))
+            return type("Space", (), {"free": 4 * 1024**3})()
+
+        with (
+            patch.object(Path, "stat", distinct_filesystems),
+            patch.object(inputs.shutil, "disk_usage", side_effect=space),
+            self.assertRaisesRegex(ValueError, f"12 GiB free on {self.cache}"),
+        ):
+            self.prepare(output=self.out / "nested", cache=self.cache / "nested")
+        self.assertFalse(any(self.out.iterdir()))
+        self.assertFalse(any(self.cache.iterdir()))
 
     def test_dirty_sources_are_rejected_before_output_creation(self):
         inputs.git.side_effect = lambda root, *args: (
@@ -452,6 +488,29 @@ class ReceiptBindingTests(unittest.TestCase):
             self.check()
 
 
+class PackageRepositorySignatureTests(unittest.TestCase):
+    def test_validsig_requires_good_status_in_same_signature(self):
+        pin = pkg_repo.FINGERPRINT
+        good = "[GNUPG:] GOODSIG 1234 Maintainer"
+        valid = f"[GNUPG:] VALIDSIG {'A' * 40} 2026-11-08 1 0 4 0 22 8 00 {pin}"
+        start = "[GNUPG:] NEWSIG"
+        for statuses in (
+            (start, "[GNUPG:] REVKEYSIG 1234 Maintainer", valid),
+            (start, "[GNUPG:] EXPKEYSIG 1234 Maintainer", valid),
+            (start, good, start, valid),
+        ):
+            result = subprocess.CompletedProcess([], 0, "\n".join(statuses))
+            with (
+                self.subTest(statuses=statuses),
+                patch.object(pkg_repo.subprocess, "run", return_value=result),
+                self.assertRaisesRegex(ValueError, "No good signature"),
+            ):
+                pkg_repo.pinned_signature(Path("test"))
+        result = subprocess.CompletedProcess([], 0, "\n".join((start, good, valid)))
+        with patch.object(pkg_repo.subprocess, "run", return_value=result):
+            pkg_repo.pinned_signature(Path("test"))
+
+
 class PackageRepositoryStageTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -520,6 +579,54 @@ class CompactionJournalTests(unittest.TestCase):
         self.target = self.dir / "system.compacted.qcow2"
         self.journal = self.dir / "compaction-journal.json"
         self.receipt = self.dir / "compaction.json"
+
+    def test_interrupted_atomic_receipt_can_be_retried(self):
+        import release
+
+        final = self.dir / "server-release-acceptance.json"
+        with (
+            patch.object(Path, "replace", side_effect=OSError("interrupted")),
+            self.assertRaisesRegex(OSError, "interrupted"),
+        ):
+            release._write_atomic(final, '{"partial": true}\n')
+        self.assertFalse(final.exists())
+        release._write_atomic(final, '{"passed": true}\n')
+        self.assertEqual(json.loads(final.read_text()), {"passed": True})
+
+    def test_stale_acceptance_digest_blocks_compaction(self):
+        import release
+
+        self.disk.write_text("original")
+        expected = release.sha(self.disk)
+        self.disk.write_text("modified since acceptance")
+        with (
+            patch.object(release.subprocess, "check_output", return_value="{}"),
+            patch.object(release.subprocess, "run") as qemu_img,
+            self.assertRaisesRegex(ValueError, "changed after testing"),
+        ):
+            release.compact(self.dir, expected_sha256=expected)
+        self.assertNotIn("convert", [call.args[0][1] for call in qemu_img.call_args_list])
+        self.assertFalse(self.journal.exists())
+        self.assertFalse(self.target.exists())
+
+    def test_prepared_compaction_recovers_with_tested_digest(self):
+        import release
+
+        self.disk.write_text("original")
+        self.target.write_text("compacted")
+        expected = release.sha(self.disk)
+        prepared = {
+            "original_sha256": expected,
+            "compacted_sha256": release.sha(self.target),
+            "backing_file": None,
+        }
+        self.journal.write_text(json.dumps({"original_sha256": expected, "receipt": prepared}))
+        with self.assertRaisesRegex(ValueError, "differs from the tested disk digest"):
+            release.compact(self.dir, expected_sha256="0" * 64)
+        self.assertEqual(self.disk.read_text(), "original")
+        self.assertEqual(release.compact(self.dir, expected_sha256=expected), prepared)
+        self.assertEqual(self.disk.read_text(), "compacted")
+        self.assertEqual(release.compact(self.dir, expected_sha256=expected), prepared)
 
     def test_conversion_journal_recovers_partial_target(self):
         import release

@@ -2,6 +2,7 @@
 """Reserve immutable release paths and record a clean server build's inputs."""
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -89,6 +90,33 @@ def unused(path):
         )
 
 
+def check_build_space(output, cache):
+    def existing_parent(path):
+        while not path.exists():
+            path = path.parent
+        if not path.is_dir():
+            raise ValueError(f"Build path has a non-directory parent: {path}")
+        return path
+
+    output_parent, cache_parent = map(existing_parent, (output, cache))
+    if output_parent.stat().st_dev == cache_parent.stat().st_dev:
+        reserves = ((output_parent, 12),)
+    else:
+        reserves = ((output_parent, 3), (cache_parent, 12))
+    for path, gib in reserves:
+        if shutil.disk_usage(path).free < gib * 1024**3:
+            raise ValueError(f"A full server build requires at least {gib} GiB free on {path}")
+
+
+def link_or_copy(source, target):
+    try:
+        return os.link(source, target)
+    except OSError as error:
+        if error.errno != errno.EXDEV:
+            raise
+        return shutil.copy2(source, target)
+
+
 def prepare(root, output, cache, image, epoch, empty_cache):
     if output.is_symlink() or cache.is_symlink():
         raise ValueError("Build paths must not be symlinks")
@@ -109,8 +137,7 @@ def prepare(root, output, cache, image, epoch, empty_cache):
     actual = git(root / "archiso", "rev-parse", "HEAD")
     if actual != expected or git(root / "archiso", "status", "--porcelain"):
         raise ValueError("Initialize the clean pinned archiso submodule first")
-    if shutil.disk_usage(root).free < 12 * 1024**3:
-        raise ValueError("A full server build requires at least 12 GiB free")
+    check_build_space(output, cache)
     claimed = []
     try:
         for path in sorted([output, cache], key=lambda p: str(p)):
@@ -131,7 +158,7 @@ def prepare(root, output, cache, image, epoch, empty_cache):
     seeded = False
     legacy = root / ".server-work/cache/mirror"
     if not empty_cache and legacy.is_dir():
-        shutil.copytree(legacy, cache / "mirror", copy_function=os.link, symlinks=True)
+        shutil.copytree(legacy, cache / "mirror", copy_function=link_or_copy, symlinks=True)
         seeded = True
     record = {
         "source_revision": git(root, "rev-parse", "HEAD"),

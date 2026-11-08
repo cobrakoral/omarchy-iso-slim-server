@@ -2,6 +2,7 @@
 """Real offline installation acceptance. Artifacts remain in test-runs/server/."""
 
 import argparse
+from contextlib import ExitStack
 import hashlib
 import fcntl
 import importlib.util
@@ -103,20 +104,46 @@ def require_owned_leaf(directory):
             raise ValueError("Recovery work disk is a backing file; use a new overlay")
 
 
-def qmp(path, command, arguments=None):
+def qmp(path, command, arguments=None, *, timeout=10):
+    deadline = time.monotonic() + timeout
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        buffer = b""
+
+        def set_timeout():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"QMP {command} timed out")
+            sock.settimeout(remaining)
+
+        def read_message():
+            nonlocal buffer
+            while True:
+                set_timeout()
+                line, separator, rest = buffer.partition(b"\n")
+                if separator:
+                    buffer = rest
+                    return json.loads(line)
+                chunk = sock.recv(4096)
+                if not chunk:
+                    raise ConnectionError(f"QMP closed while waiting for {command}")
+                buffer += chunk
+
+        set_timeout()
         sock.connect(str(path))
-        f = sock.makefile("rwb", buffering=0)
-        f.readline()
+        if "QMP" not in read_message():
+            raise ValueError("QMP greeting missing")
         for cmd in [
             {"execute": "qmp_capabilities"},
             {"execute": command, "arguments": arguments or {}},
         ]:
-            f.write((json.dumps(cmd) + "\n").encode())
+            set_timeout()
+            sock.sendall((json.dumps(cmd) + "\n").encode())
             while True:
-                reply = json.loads(f.readline())
+                reply = read_message()
                 if "return" in reply or "error" in reply:
                     break
+            if "error" in reply:
+                return reply
         return reply
 
 
@@ -221,20 +248,27 @@ class VM:
         )
         self.child.logfile = self.log
 
-    def stop(self):
-        if self.child.isalive():
-            qmp(self.qmp, "system_powerdown")
-            try:
-                self.child.expect(pexpect.EOF, timeout=60)
-            except pexpect.TIMEOUT:
-                qmp(self.qmp, "quit")
-                self.child.expect(pexpect.EOF, timeout=10)
-        else:
-            self.child.expect(pexpect.EOF, timeout=5)
-        self.child.close()
-        self.log.close()
-        self.control.cleanup()
-        self.port_guard.close()
+    def stop(self, *, require_clean=False):
+        with ExitStack() as cleanup:
+            cleanup.callback(self.port_guard.close)
+            cleanup.callback(self.control.cleanup)
+            cleanup.callback(self.log.close)
+            cleanup.callback(self.child.close, force=True)
+            if self.child.isalive():
+                reply = qmp(self.qmp, "system_powerdown")
+                if "error" in reply:
+                    raise RuntimeError(f"QMP powerdown failed: {reply['error']}")
+                try:
+                    self.child.expect(pexpect.EOF, timeout=60)
+                except pexpect.TIMEOUT as error:
+                    qmp(self.qmp, "quit")
+                    self.child.expect(pexpect.EOF, timeout=10)
+                    if require_clean:
+                        raise RuntimeError("VM did not shut down cleanly") from error
+            else:
+                self.child.expect(pexpect.EOF, timeout=5)
+        if require_clean and self.child.exitstatus != 0:
+            raise RuntimeError("QEMU exited unsuccessfully")
 
     def ssh(self, command, check=True):
         result = sp.run(
@@ -530,7 +564,9 @@ cat /boot/limine.conf
             "checks": "boot, console password, key SSH, networkd, resolved, no egress, package exclusions, snapshot creation and boot entries, cloud-init selection",
         }
     finally:
-        vm.stop()
+        vm.stop(require_clean=True)
+    with disk.open("rb") as stream:
+        receipt_data["disk_sha256"] = hashlib.file_digest(stream, "sha256").hexdigest()
     receipt_path = directory / "acceptance-pass.json"
     temporary = receipt_path.with_suffix(".json.tmp")
     with temporary.open("x") as stream:

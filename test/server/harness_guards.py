@@ -5,10 +5,12 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import tempfile
+import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import qemu
 from system_upgrade import maintenance_package
 
@@ -16,6 +18,29 @@ ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("package_repository", ROOT / "builder/server/package-repository.py")
 repository = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(repository)
+
+class QmpShutdownTests(unittest.TestCase):
+    def test_missing_greeting_times_out(self):
+        with tempfile.TemporaryDirectory() as directory, socket.socket(socket.AF_UNIX) as listener:
+            address = Path(directory) / "qmp"
+            listener.bind(str(address))
+            listener.listen()
+            with self.assertRaises(TimeoutError):
+                qemu.qmp(address, "query-status", timeout=0.05)
+
+    def test_shutdown_failure_still_cleans_every_resource(self):
+        vm = types.SimpleNamespace(
+            child=Mock(), log=Mock(), control=Mock(), port_guard=Mock(), qmp=Path("qmp")
+        )
+        vm.child.isalive.return_value = True
+        with patch.object(qemu, "qmp", side_effect=TimeoutError):
+            with self.assertRaises(TimeoutError):
+                qemu.VM.stop(vm)
+        vm.child.close.assert_called_once_with(force=True)
+        vm.log.close.assert_called_once_with()
+        vm.control.cleanup.assert_called_once_with()
+        vm.port_guard.close.assert_called_once_with()
+
 
 class SourceHashTests(unittest.TestCase):
     def test_parent_build_directory_names_do_not_hide_sources(self):

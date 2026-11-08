@@ -63,15 +63,25 @@ def pinned_signature(path, signature=None):
         capture_output=True,
         check=True,
     )
-    signatures = [
-        line.split()
-        for line in result.stdout.splitlines()
-        if line.startswith("[GNUPG:] VALIDSIG ")
-    ]
-    if not any(
-        parts[2] == FINGERPRINT or parts[-1] == FINGERPRINT for parts in signatures
-    ):
-        raise ValueError("Signature is not from the pinned server maintainer")
+    # GnuPG can report VALIDSIG for expired or revoked keys. Only accept a
+    # good signature and a pinned fingerprint from the same signature group.
+    good = pinned = rejected = False
+    for line in [*result.stdout.splitlines(), "[GNUPG:] NEWSIG"]:
+        parts = line.split()
+        if len(parts) < 2 or parts[0] != "[GNUPG:]":
+            continue
+        status = parts[1]
+        if status == "NEWSIG":
+            if good and pinned and not rejected:
+                return
+            good = pinned = rejected = False
+        elif status == "GOODSIG":
+            good = True
+        elif status == "VALIDSIG" and len(parts) >= 11:
+            pinned = FINGERPRINT in (parts[2], parts[11] if len(parts) > 11 else None)
+        elif status in {"BADSIG", "ERRSIG", "EXPSIG", "EXPKEYSIG", "REVKEYSIG"}:
+            rejected = True
+    raise ValueError("No good signature from the pinned server maintainer")
 
 
 def verify(repo):

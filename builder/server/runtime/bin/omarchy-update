@@ -8,6 +8,7 @@ if (( EUID != 0 )); then exec sudo -- "$0" "$@"; fi
 exec 9>/run/omarchy-server-update.lock
 flock -n 9 || { echo 'Another server update is running.' >&2; exit 1; }
 mountpoint -q /boot || { echo "Cannot update: /boot is not mounted." >&2; exit 1; }
+omarchy-server-boot-check --check-mount
 omarchy-server-repository --check
 # These are minimum working reserves, not an estimate of every possible upgrade.
 # Pacman still performs its normal transaction-specific disk-space checks.

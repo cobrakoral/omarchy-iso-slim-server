@@ -205,6 +205,10 @@ def authorized_keys(path):
 
 
 def validate(answers, system_users=()):
+    if "disk_seq" in answers and (
+        type(answers["disk_seq"]) is not int or answers["disk_seq"] <= 0
+    ):
+        raise ValueError("Installation disk requires a positive kernel disk sequence number")
     for name, pattern in [
         ("hostname", r"[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?"),
         ("username", r"[a-z_][a-z0-9_-]{0,30}"),
@@ -366,7 +370,7 @@ def make_config(answers, size, system_users=()):
         "server": {
             k: v
             for k, v in answers.items()
-            if k in ("network", "address", "gateway", "dns", "mac", "cloud_init")
+            if k in ("network", "address", "gateway", "dns", "mac", "cloud_init", "disk_seq")
         },
     }
     creds = {
@@ -394,17 +398,25 @@ if __name__ == "__main__":
     if sys.argv[1:] == ["--list-disks"]:
         devices = lsblk_inventory()
         candidates = candidate_disks(devices)
+        candidates = [
+            device for device in candidates
+            if type(device.get("disk-seq")) is int and device["disk-seq"] > 0
+        ]
         if not candidates:
-            sys.exit("No unmounted writable disks of at least 12 GiB found.")
+            sys.exit("No unmounted writable disks of at least 12 GiB with a kernel disk sequence number found.")
         for device in candidates:
+            model = " ".join((device.get("model") or "").split())
             print(
-                f"{device['path']} {int(device['size']) / 1024**3:.1f} GiB {device.get('model') or ''}"
+                f"{device['path']} {device['disk-seq']} "
+                f"{int(device['size']) / 1024**3:.1f} GiB {model}"
             )
         sys.exit(0)
     answers = json.loads(Path(sys.argv[1]).read_text())
     disk = answers["disk"]
     # Whole disks only, and never the mounted live medium or a mounted host disk.
     selected = require_candidate_disk(disk)
+    if "disk_seq" in answers and answers["disk_seq"] != selected.get("disk-seq"):
+        sys.exit("Installation disk sequence changed since selection")
     users, groups = target_accounts()
     config, creds = make_config(answers, int(selected["size"]), users | groups)
     for name, obj in [

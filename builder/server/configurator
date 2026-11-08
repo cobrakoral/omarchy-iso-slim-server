@@ -2,7 +2,7 @@
 # Bash/Gum text front end to the shared Archinstall orchestrator.
 set -euo pipefail
 umask 077
-trap 'unset password passphrase; rm -f /run/server-answers.json' EXIT
+trap 'unset password password_hash passphrase; rm -f /run/server-answers.json' EXIT
 export GUM_INPUT_SHOW_HELP=false GUM_CHOOSE_SHOW_HELP=false
 printf 'Omarchy Slim Server — unofficial edition\nAll packages install offline. The selected disk will be erased.\n'
 locale=$(python /usr/share/omarchy-iso/server_config.py --list-locales | gum filter --header 'System language / locale (default en_US.UTF-8)' --value en_US.UTF-8)
@@ -38,7 +38,18 @@ if gum confirm --default=false 'Encrypt the disk with LUKS? (default No)'; then
 fi
 cloud_init=false
 if gum confirm --default=false 'Install cloud-init? (default No)'; then cloud_init=true; fi
-disk=$(python /usr/share/omarchy-iso/server_config.py --list-disks | gum choose --header 'Installation disk — ERASES THE WHOLE DISK' | awk '{print $1}')
+selection=$(python /usr/share/omarchy-iso/server_config.py --list-disks | gum choose --header 'Installation disk — ERASES THE WHOLE DISK')
+read -r disk disk_seq _ <<<"$selection"
+[[ $disk_seq =~ ^[1-9][0-9]*$ ]] || { echo 'Installation disk identity is missing.' >&2; exit 1; }
 gum confirm --default=false "Erase $disk and install $hostname?" || exit 1
-jq -n --arg disk "$disk" --arg hostname "$hostname" --arg username "$username" --arg password_hash "$password_hash" --arg timezone "$timezone" --arg keyboard "$keyboard" --arg locale "$locale" --arg network "$network" --arg address "$address" --arg gateway "$gateway" --arg dns "$dns" --arg mac "$mac" --arg encryption_password "$passphrase" --argjson encrypt "$encrypt" --argjson cloud_init "$cloud_init" '$ARGS.named' >/run/server-answers.json
+jq -n --arg disk "$disk" --argjson disk_seq "$disk_seq" \
+  --arg hostname "$hostname" --arg username "$username" \
+  --rawfile password_hash <(printf '%s' "$password_hash") \
+  --arg timezone "$timezone" --arg keyboard "$keyboard" --arg locale "$locale" \
+  --arg network "$network" --arg address "$address" --arg gateway "$gateway" \
+  --arg dns "$dns" --arg mac "$mac" \
+  --rawfile encryption_password <(printf '%s' "$passphrase") \
+  --argjson encrypt "$encrypt" --argjson cloud_init "$cloud_init" \
+  '$ARGS.named' >/run/server-answers.json
+unset passphrase password_hash
 python /usr/share/omarchy-iso/server_config.py /run/server-answers.json

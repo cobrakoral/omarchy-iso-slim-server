@@ -83,6 +83,19 @@ class InputValidationTests(unittest.TestCase):
             state_dir=self.directory / "state", arch_config_path=self.directory / "original-config",
             creds_path=self.directory / "original-creds")
 
+    def test_selected_disk_identity_survives_config_generation(self):
+        answers = dict(self.answers, disk_seq=self.disk_seq)
+        conf, creds = config.make_config(answers, 16 * 1024**3)
+        self.ctx.user_configuration = conf
+        self.ctx.omarchy_install = conf["omarchy_install"]
+        self.ctx.user_credentials = creds
+        self.assertEqual(self.ctx.omarchy_install["server"]["disk_seq"], 1)
+        self.disk_seq = 2
+        with self.assertRaisesRegex(ValueError, "changed since selection"):
+            self.server.validate(self.ctx)
+        self.assertFalse(self.ctx.state_dir.exists())
+        self.assertEqual(self.cleanup_calls, [])
+
     def test_credentials_cannot_override_configuration(self):
         for name in ("disk_config", "disk_encryption", "kernels", "auth_config", "root_enc_password", "!users", "custom_commands"):
             with self.subTest(name=name):

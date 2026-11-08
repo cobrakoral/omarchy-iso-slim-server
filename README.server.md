@@ -28,7 +28,7 @@ OMARCHY_EDITION=server bin/omarchy-iso-make --no-boot-offer
 # sha256sum --check SHA256SUMS
 ```
 
-The current checkout uses the signed `omarchy-server 0.2.0-2` candidate.
+This checkout requires a signed `omarchy-server 0.2.0-3` candidate.
 The published `server-packages` branch serves `0.2.0-1` for matching earlier
 checkouts. To build this revision, use its matching signed repository. A
 maintainer with the signing key can build it using the channel steps below.
@@ -36,7 +36,8 @@ maintainer with the signing key can build it using the channel steps below.
 The selector dispatches before the desktop builder handles caches. Server
 work belongs exclusively to `.server-work/`; no host system package cache is
 purged. Each build gets a new cache/output generation; earlier project package
-archives seed it through hard links and remain preserved. Use `--empty-cache`
+archives seed it through hard links or cross-filesystem copies and remain
+preserved. Use `--empty-cache`
 to disable that seeding. Output and cache paths must be absent or empty;
 a populated generation is refused before Docker starts. Builds require clean
 committed sources, the pinned clean archiso submodule, and a container digest.
@@ -105,7 +106,8 @@ server tests, builds the ISO, checks clean source provenance, and installs
 fresh default UEFI, cloud-init UEFI, BIOS and encrypted UEFI guests. It compares
 each installed package/version map against the build's base/cloud closures.
 Acceptance receipts bind the ISO SHA-256, source revision, source cleanliness
-and harness hash. The qualifier then tests installed channel trust without
+and harness hash, plus the stopped test disk's SHA-256 before compaction.
+The qualifier then tests installed channel trust without
 manual key import and boots/restores an actual snapshot, followed by normal
 root boot and another installed-trust check. Any failed command prevents the
 final `server-release-acceptance.json` success record.
@@ -118,7 +120,8 @@ disk is compacted or removed. After each fresh installation, safe QEMU rebase
 can retain only the bytes differing from the first accepted disk. That base
 and all dependencies remain preserved. This storage step happens after the
 full fresh installation; it does not substitute a cloned system for a test. New guest cases require an 8 GiB free-space
-reserve, and a full build requires at least 12 GiB before it starts.
+reserve. A full build needs 12 GiB free when output and cache share a
+filesystem. On separate filesystems, allow 3 GiB for output and 12 GiB for cache.
 
 If qualification stops after the build has been recorded, resume with the
 same checkout revision, output/cache paths, and
@@ -216,10 +219,19 @@ with tempfile.TemporaryDirectory(prefix="omarchy-verify-") as gpghome:
                 primary[-1] = fields[9]
         if primary != [FINGERPRINT]:
             raise ValueError("Keyring does not contain only the pinned maintainer key")
-        subprocess.run(
-            [*gpg, "--no-auto-key-retrieve", "--verify", "repository.json.sig", "repository.json"],
-            check=True,
+        status = subprocess.check_output(
+            [*gpg, "--no-auto-key-retrieve", "--status-fd=1", "--verify",
+             "repository.json.sig", "repository.json"],
+            text=True,
         )
+        signatures = [
+            {line.split()[1] for line in group.splitlines() if line.startswith("[GNUPG:] ")}
+            for group in ("\n" + status).split("\n[GNUPG:] NEWSIG")[1:]
+        ]
+        if not signatures or any(
+            not {"GOODSIG", "VALIDSIG"} <= signature for signature in signatures
+        ):
+            raise ValueError("Expected a good manifest signature from the pinned maintainer key")
     finally:
         subprocess.run(["gpgconf", "--homedir", gpghome, "--kill", "all"], check=False)
 

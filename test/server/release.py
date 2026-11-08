@@ -12,6 +12,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -113,19 +114,19 @@ def _finalize_compaction(directory, target, disk, receipt_path, journal_path, re
     return receipt
 
 
-def compact(directory, backing=None):
+def compact(directory, backing=None, *, expected_sha256=None):
     lock_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
     try:
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
             raise RuntimeError(f"Compaction already in progress for {directory}") from error
-        return _compact_locked(directory, backing, lock_fd)
+        return _compact_locked(directory, backing, lock_fd, expected_sha256)
     finally:
         os.close(lock_fd)
 
 
-def _compact_locked(directory, backing, lock_fd):
+def _compact_locked(directory, backing, lock_fd, expected_sha256):
     # Only this invocation's newly installed, stopped disk, before overlays exist.
     disk = directory / "system.qcow2"
     target = directory / "system.compacted.qcow2"
@@ -137,17 +138,21 @@ def _compact_locked(directory, backing, lock_fd):
         raise ValueError("System disk is not a regular file; preserving evidence")
     if target.is_symlink() or (target.exists() and not target.is_file()):
         raise ValueError("Compaction target path is not a regular file; preserving evidence")
-    if journal_path.is_symlink():
-        raise ValueError("Compaction journal is a symlink; preserving evidence")
+    if journal_path.is_symlink() or receipt_path.is_symlink():
+        raise ValueError("Compaction evidence is a symlink; preserving evidence")
 
     if journal_path.is_file():
         journal = json.loads(journal_path.read_text())
+        if expected_sha256 is not None and journal.get("original_sha256") != expected_sha256:
+            raise ValueError("Compaction journal differs from the tested disk digest; preserving evidence")
         disk_sha = sha(disk)
         if "receipt" in journal:
             receipt_payload = journal["receipt"]
             if receipt_payload["backing_file"] != backing_str:
                 raise ValueError("Compaction journal backing file mismatch; preserving evidence")
             orig_sha = journal["original_sha256"]
+            if expected_sha256 is not None and receipt_payload.get("original_sha256") != orig_sha:
+                raise ValueError("Prepared compaction receipt differs from the tested disk digest; preserving evidence")
             prep_sha = receipt_payload["compacted_sha256"]
             if target.exists():
                 if disk_sha != orig_sha or sha(target) != prep_sha:
@@ -174,6 +179,11 @@ def _compact_locked(directory, backing, lock_fd):
         previous = json.loads(old_record.read_text())
         if sha(disk) != previous["compacted_sha256"]:
             raise ValueError("Completed test disk changed before resume")
+        if expected_sha256 is not None and (
+            previous.get("original_sha256") != expected_sha256
+            or previous.get("backing_file") != backing_str
+        ):
+            raise ValueError("Completed compaction differs from the tested disk or backing file")
         if previous.get("backing_file") == backing_str:
             return previous
         shutil.copy2(old_record, directory / "standalone-compaction.json")
@@ -189,6 +199,8 @@ def _compact_locked(directory, backing, lock_fd):
         ["qemu-img", "check", str(disk)], check=True, stdout=subprocess.DEVNULL
     )
     orig_sha = sha(disk)
+    if expected_sha256 is not None and orig_sha != expected_sha256:
+        raise ValueError("Acceptance disk changed after testing; preserving evidence")
     converting = {
         "stage": "converting",
         "original_sha256": orig_sha,
@@ -248,6 +260,7 @@ def _compact_locked(directory, backing, lock_fd):
         "allocated_before": before,
         "allocated_after": after,
         "compacted_sha256": prep_sha,
+        "original_sha256": orig_sha,
         "backing_file": backing_str,
     }
     journal_data = {
@@ -599,6 +612,8 @@ def _main_locked(args, output, cache, work, work_lock):
         receipt_path = directory / "acceptance-pass.json" if directory else None
         reusing = receipt_path is not None and (receipt_path.exists() or receipt_path.is_symlink())
         if not reusing:
+            if "compaction" in cases.get(name, {}):
+                raise ValueError(f"Completed acceptance receipt is missing: {receipt_path}")
             directory = server_runs / (prefix + uuid.uuid4().hex)
             receipt_path = directory / "acceptance-pass.json"
             cases[name] = {"directory": str(directory)}
@@ -633,11 +648,31 @@ def _main_locked(args, output, cache, work, work_lock):
         if name == "cloud":
             packages.update(expected["cloud_delta"])
         validate_receipt(receipt, iso_hash, packages)
+        disk_sha = receipt.get("disk_sha256")
+        if not isinstance(disk_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", disk_sha):
+            raise ValueError(f"Acceptance receipt is missing the tested disk digest: {directory}")
+        backing = bases["base"] / "system.qcow2" if name != "base" else None
+        recorded = cases[name]
+        if "compaction" in recorded:
+            compaction = recorded["compaction"]
+            disk = directory / "system.qcow2"
+            sidecar = directory / "compaction.json"
+            if (
+                recorded["receipt"] != receipt
+                or disk.is_symlink()
+                or not disk.is_file()
+                or sidecar.is_symlink()
+                or not sidecar.is_file()
+                or json.loads(sidecar.read_text()) != compaction
+                or compaction["original_sha256"] != disk_sha
+                or compaction["backing_file"] != (str(backing) if backing else None)
+                or sha(disk) != compaction["compacted_sha256"]
+            ):
+                raise ValueError(f"Completed acceptance evidence changed: {directory}")
+        else:
+            compaction = compact(directory, backing, expected_sha256=disk_sha)
         if reusing:
             print("REUSING_VERIFIED_INSTALL", wanted, directory, flush=True)
-        compaction = compact(
-            directory, bases["base"] / "system.qcow2" if name != "base" else None
-        )
         cases[name] = {
             "directory": str(directory),
             "receipt": receipt,
@@ -732,8 +767,8 @@ def _main_locked(args, output, cache, work, work_lock):
             "Physical hardware and Secure Boot remain unverified",
         ],
     }
-    (output / "server-release-acceptance.json").write_text(
-        json.dumps(record, indent=2) + "\n"
+    _write_atomic(
+        output / "server-release-acceptance.json", json.dumps(record, indent=2) + "\n"
     )
     print("SERVER_FRESH_RELEASE_ACCEPTANCE_PASS", output, flush=True)
 
