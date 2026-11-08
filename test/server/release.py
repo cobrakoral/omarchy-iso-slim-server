@@ -345,6 +345,22 @@ def verify_run_identity(record, work, output, cache, source):
         raise ValueError("Acceptance test source revision changed before resume")
 
 
+def require_cold_release_inputs(inputs):
+    if (
+        inputs.get("empty_cache_requested") is not True
+        or inputs.get("legacy_cache_seeded") is not False
+        or inputs.get("source_dirty") is not False
+    ):
+        raise ValueError("Fresh release requires clean source and an unseeded empty build cache")
+
+
+def require_recovery_receipt(directory):
+    path = directory / "rollback-pass.txt"
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("Snapshot recovery did not produce a regular passing receipt")
+    return path
+
+
 def repository_provenance(output, repo):
     digest = sha(repo / "repository.json")
     if (output / "server-repository-provenance.sha256").read_text().split() != [
@@ -537,11 +553,7 @@ def _main_locked(args, output, cache, work, work_lock):
     iso = isos[0]
     iso_hash = sha(iso)
     inputs = json.loads((output / "server-build-inputs.json").read_text())
-    assert (
-        inputs["empty_cache_requested"]
-        and not inputs["legacy_cache_seeded"]
-        and not inputs["source_dirty"]
-    )
+    require_cold_release_inputs(inputs)
     spec = importlib.util.spec_from_file_location(
         "build_inputs", ROOT / "builder/server/build-inputs.py"
     )
@@ -730,7 +742,7 @@ def _main_locked(args, output, cache, work, work_lock):
         work / "recovery.log",
         env,
     )
-    assert (recovery / "rollback-pass.txt").is_file()
+    require_recovery_receipt(recovery)
     vm = VM(recovery, recovery / "system.qcow2", args.port, [], share=repo)
     try:
         vm.wait_ssh()

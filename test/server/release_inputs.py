@@ -812,5 +812,52 @@ class CompactionJournalTests(unittest.TestCase):
         self.assertFalse(self.receipt.exists())
 
 
+
+class OptimizedReleaseSafetyTests(unittest.TestCase):
+    """Release integrity checks must execute even with Python -O or -OO."""
+
+    def test_cold_release_rejects_dirty_or_seeded_inputs(self):
+        import release
+        good = dict(empty_cache_requested=True, legacy_cache_seeded=False, source_dirty=False)
+        release.require_cold_release_inputs(good)
+        for field, invalid in (("empty_cache_requested", False),
+                               ("legacy_cache_seeded", True),
+                               ("source_dirty", True)):
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ValueError, "unseeded empty build cache"):
+                    release.require_cold_release_inputs(good | {field: invalid})
+
+    def test_missing_or_symlinked_recovery_receipt_refused(self):
+        import release
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaisesRegex(ValueError, "passing receipt"):
+                release.require_recovery_receipt(root)
+            outside = root / "elsewhere"
+            outside.write_text("not a receipt")
+            (root / "rollback-pass.txt").symlink_to(outside)
+            with self.assertRaisesRegex(ValueError, "passing receipt"):
+                release.require_recovery_receipt(root)
+            (root / "rollback-pass.txt").unlink()
+            receipt = root / "rollback-pass.txt"
+            receipt.write_text("validated recovery")
+            self.assertEqual(release.require_recovery_receipt(root), receipt)
+
+    def test_guards_still_execute_with_python_optimization(self):
+        expression = (
+            "import sys, pathlib; "
+            f"sys.path.insert(0, {str(ROOT / 'test/server')!r}); "
+            "import release; "
+            "release.require_cold_release_inputs(dict(empty_cache_requested=False, "
+            "legacy_cache_seeded=True, source_dirty=True))"
+        )
+        for level in ("-O", "-OO"):
+            with self.subTest(level=level):
+                result = subprocess.run(["python3", level, "-c", expression],
+                                        capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("unseeded empty build cache", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
