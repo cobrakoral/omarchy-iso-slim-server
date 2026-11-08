@@ -16,22 +16,34 @@ VMs; sparse guest disks still consume their written data. 4 GiB RAM plus
 swap works with the two-worker live compression limit.
 
 ```sh
-git clone --recurse-submodules git@github.com:cobrakoral/omarchy-iso-slim-server.git
+git clone --recurse-submodules https://github.com/cobrakoral/omarchy-iso-slim-server.git
 cd omarchy-iso-slim-server
-git checkout feature/slim-server
-# Compare the public-key fingerprint below before importing it.
+git switch feature/slim-server
+# Independently compare this fingerprint before trusting the key:
+# 7C5C6FEB40A5B493007FAA3650B1EB533F640140
+gpg --show-keys --with-fingerprint builder/server/keyring/omarchy-server.asc
 gpg --import builder/server/keyring/omarchy-server.asc
-# Use the signed candidate that matches the checked-out package recipes.
-export OMARCHY_SERVER_REPOSITORY_DIR=/path/to/signed-candidate/stable/x86_64
-OMARCHY_EDITION=server bin/omarchy-iso-make --no-boot-offer
-# Enter the release/server-<timestamp> directory printed by the builder.
-# sha256sum --check SHA256SUMS
+
+# Download the public signed package channel without any signing credentials.
+mkdir -p .server-work
+git clone --depth=1 --single-branch --branch server-packages \
+  https://github.com/cobrakoral/omarchy-iso-slim-server.git \
+  .server-work/published-packages
+export OMARCHY_SERVER_REPOSITORY_DIR="$PWD/.server-work/published-packages/stable/x86_64"
+python3 builder/server/package-repository.py --verify "$OMARCHY_SERVER_REPOSITORY_DIR"
+OMARCHY_EDITION=server bin/omarchy-iso-make --empty-cache --no-boot-offer
+# Check SHA256SUMS inside the new release/server-<timestamp> output directory.
 ```
 
-This checkout requires a signed `omarchy-server 0.2.0-3` candidate.
-The published `server-packages` branch serves `0.2.0-1` for matching earlier
-checkouts. To build this revision, use its matching signed repository. A
-maintainer with the signing key can build it using the channel steps below.
+The currently published `server-packages` channel provides the signed
+`omarchy-server 0.2.0-3` runtime used by the qualified 2026.11.08 `test2` ISO.
+Older versioned package archives are retained for historical installations;
+Pacman resolves the current version from the signed repository database.
+A normal source build **does not require a private signing key** when using
+this published channel. Building or publishing a changed runtime package does
+require an authorized signing key, a package-version bump and separate review.
+A checkout with changed packaged sources may fail channel verification until
+its matching newly signed package generation is published.
 
 The selector dispatches before the desktop builder handles caches. Server
 work belongs exclusively to `.server-work/`; no host system package cache is
@@ -156,9 +168,10 @@ digest also does not freeze later package downloads.
 
 ## Current release and signed updates
 
-The qualified 2026.11.07 ISO includes the installer preflight and update
-recovery fixes, the explicit virtual power-button policy, and the signed
-**omarchy-server 0.2.0-2**, **omarchy-server-keyring 20261031-1** and
+The latest qualified and published 2026.11.08 `test2` ISO includes the
+fail-closed disk-signature cleanup, installer preflight and update recovery,
+plus the explicit virtual power-button policy. It uses signed
+**omarchy-server 0.2.0-3**, **omarchy-server-keyring 20261031-1**, and
 **limine-snapper-sync-server 1.32.1-3** packages.
 The snapshot core still comes from the pinned official 1.32.1-2 archive;
 `-3` is the headless packaging revision, not a new upstream snapshot-core version.
@@ -361,6 +374,13 @@ The unattended input remains the official installer-only `cidata` format:
 contract using `builder/server/config.py`; see `test/server/qemu.py` for a
 complete disposable example. Desktop/deferred/protected input is refused
 by this edition before disk cleanup. Store credential media securely.
+After a successful installation, the live console deletes its own temporary
+credential and validated-configuration copies **before offering reboot**;
+attached input media is not touched. Declining reboot exits successfully and
+keeps the live console available without restarting installation. On an
+installation failure, credentials remain in the live session for a deliberate
+retry; repair and retry promptly, or shut down the live environment instead
+of leaving its root-autologin console unattended.
 
 ## ACPI shutdown in virtual machines
 
