@@ -382,5 +382,52 @@ class InputValidationTests(unittest.TestCase):
             self.server.validate(self.ctx)
         self.assertEqual(self.cleanup_calls, [])
 
+
+class DiskSignatureCleanupTests(unittest.TestCase):
+    """Exercise the actual wipe helper with synthetic devices and mock commands."""
+
+    def run_wipe(self, failure):
+        script = (ROOT / "configs/airootfs/usr/local/bin/omarchy-iso-cleanup-disk").read_text()
+        function = "release_and_wipe() {" + script.split("release_and_wipe() {", 1)[1].split("\n}\n", 1)[0] + "\n}"
+        shell = "\n".join((
+            "set -uo pipefail", function,
+            'disk=/dev/fake-disk; disk_name=fake-disk',
+            'partitions() { echo fake-disk1; }',
+            'guard_server_disk() { :; }',
+            'unuse() { :; }',
+            'release_holders() { :; }',
+            'wipefs() {',
+            '  if [[ $FAIL == partition && $* == *fake-disk1* ]] || '
+            '[[ $FAIL == disk && $* == *fake-disk && $* != *fake-disk1* ]]; then return 74; fi',
+            '  echo "WIPED $*" >&2',
+            '}',
+            'blockdev() { echo "BLOCKDEV $*"; [[ $FAIL != reread || $1 != --rereadpt ]]; }',
+            'if release_and_wipe; then echo CLEANUP_SUCCEEDED; else echo CLEANUP_REFUSED; fi',
+        ))
+        return subprocess.run(["bash", "-c", shell], capture_output=True, text=True,
+                              env=dict(os.environ, FAIL=failure), check=True)
+
+    def test_failure_on_partition_signature_wipe_refuses_cleanup(self):
+        result = self.run_wipe("partition")
+        self.assertIn("CLEANUP_REFUSED", result.stdout)
+        self.assertNotIn("BLOCKDEV --rereadpt", result.stdout)
+        self.assertIn("Could not erase old signatures on /dev/fake-disk1", result.stderr)
+
+    def test_failure_on_whole_disk_signature_wipe_refuses_cleanup(self):
+        result = self.run_wipe("disk")
+        self.assertIn("CLEANUP_REFUSED", result.stdout)
+        self.assertNotIn("BLOCKDEV --rereadpt", result.stdout)
+        self.assertIn("Could not erase old signatures on /dev/fake-disk", result.stderr)
+
+    def test_clean_signatures_and_reread_allow_cleanup(self):
+        result = self.run_wipe("none")
+        self.assertIn("CLEANUP_SUCCEEDED", result.stdout)
+        self.assertIn("BLOCKDEV --rereadpt", result.stdout)
+
+    def test_failed_partition_table_reread_refuses_cleanup(self):
+        result = self.run_wipe("reread")
+        self.assertIn("CLEANUP_REFUSED", result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

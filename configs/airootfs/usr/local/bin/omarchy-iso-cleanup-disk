@@ -131,10 +131,16 @@ release_and_wipe() {
   # member keeps its superblock near the end), all but the partition table.
   for part in $(partitions); do
     guard_server_disk
-    wipefs --all --force "/dev/$part" >/dev/null || true
+    if ! wipefs --all --force "/dev/$part" >/dev/null; then
+      echo "Could not erase old signatures on /dev/$part; refusing to continue." >&2
+      return 1
+    fi
   done
   guard_server_disk
-  wipefs --all --force --types nogpt,PMBR,dos "$disk" >/dev/null || true
+  if ! wipefs --all --force --types nogpt,PMBR,dos "$disk" >/dev/null; then
+    echo "Could not erase old signatures on $disk; refusing to continue." >&2
+    return 1
+  fi
   blockdev --flushbufs "$disk" 2>/dev/null || true
   blockdev --rereadpt "$disk" 2>/dev/null
 }
