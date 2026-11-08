@@ -429,5 +429,136 @@ class DiskSignatureCleanupTests(unittest.TestCase):
         self.assertIn("CLEANUP_REFUSED", result.stdout)
 
 
+
+class InstallerLifecycleTests(unittest.TestCase):
+    """Execute the shipped Bash wrapper against disposable command/file fixtures."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="omarchy-installer-lifecycle-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.live_root = self.root / "root"
+        self.live_run = self.root / "run"
+        self.work = self.root / "work"
+        self.commands = self.root / "commands"
+        self.state = self.live_run / "omarchy-install"
+        for directory in (self.live_root, self.live_run, self.work, self.commands, self.state):
+            directory.mkdir(parents=True, exist_ok=True)
+        self.sensitive = [
+            self.live_root / name for name in (
+                "user_configuration.json", "user_credentials.json",
+                "user_encrypt_installation.txt", "authorized_keys"
+            )
+        ] + [
+            self.state / name for name in (
+                "archinstall-user_configuration.json",
+                "provisioning-user_credentials.json", "server-validated-first.json",
+                "server-validated-second.json",
+            )
+        ]
+        for path in self.sensitive:
+            path.write_text("SYNTHETIC-NO-REAL-CREDENTIALS")
+        self.external_key = self.root / "external-cidata-public-key"
+        self.external_key.write_text("EXTERNAL-MEDIA-UNCHANGED")
+        commands = {
+            "tty": "printf '/dev/tty1\\n'",
+            "cidata-load": "exit 0",
+            "python": (
+                "if [[ ${1:-} != -m || ${2:-} != orchestrator.main ]]; then exit 92; fi\n"
+                "printf 'called\\n' >> \"$MOCK_ORCHESTRATOR_CALLS\"\n"
+                "printf 'Simulated orchestrator only\\n'\n"
+                "exit \"${MOCK_INSTALL_STATUS:-0}\""
+            ),
+            "gum": 'exit "${MOCK_GUM_STATUS:-1}"',
+            "sync": ":",
+            "systemctl": "printf '%s\\n' \"$*\" >> \"$MOCK_SYSTEMCTL_CALLS\"",
+        }
+        for name, body in commands.items():
+            target = self.commands / name
+            target.write_text("#!/bin/bash\n" + body + "\n")
+            target.chmod(0o755)
+        source = (ROOT / "builder/server/automated.sh").read_text()
+        redirects = {
+            "/usr/local/bin/omarchy-cidata-load": str(self.commands / "cidata-load"),
+            "/usr/share/omarchy-iso": str(self.work),
+            "/var/log/omarchy-install.log": str(self.root / "install.log"),
+            "/run/omarchy-server-install-complete": str(self.live_run / "install-complete"),
+            "/run/omarchy-server-installer.lock": str(self.live_run / "installer.lock"),
+            "/run/omarchy-install": str(self.state),
+            "/root/server-autoreboot": str(self.live_root / "server-autoreboot"),
+            "/root/user_configuration.json": str(self.live_root / "user_configuration.json"),
+            "/root/user_credentials.json": str(self.live_root / "user_credentials.json"),
+            "/root/user_encrypt_installation.txt": str(self.live_root / "user_encrypt_installation.txt"),
+            "/root/authorized_keys": str(self.live_root / "authorized_keys"),
+            "/root/configurator": str(self.commands / "configurator"),
+        }
+        for old, new in sorted(redirects.items(), key=lambda item: len(item[0]), reverse=True):
+            source = source.replace(old, new)
+        self.script = self.root / "automated.sh"
+        self.script.write_text(source)
+        self.script.chmod(0o755)
+        self.marker = self.live_run / "install-complete"
+        self.orchestrator_calls = self.root / "orchestrator-calls"
+        self.systemctl_calls = self.root / "systemctl-calls"
+
+    def invoke(self, status=0, gum=1):
+        environment = dict(os.environ,
+            PATH=str(self.commands) + ":" + os.environ["PATH"],
+            MOCK_ORCHESTRATOR_CALLS=str(self.orchestrator_calls),
+            MOCK_SYSTEMCTL_CALLS=str(self.systemctl_calls),
+            MOCK_INSTALL_STATUS=str(status), MOCK_GUM_STATUS=str(gum))
+        return subprocess.run(["bash", str(self.script)], capture_output=True,
+                              text=True, env=environment)
+
+    def test_success_scrubs_only_live_owned_secrets_without_reboot(self):
+        result = self.invoke(gum=1)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.marker.is_file())
+        self.assertEqual(self.marker.read_text(), "completed\n")
+        self.assertTrue(all(not path.exists() for path in self.sensitive))
+        self.assertFalse(self.systemctl_calls.exists())
+        self.assertEqual(self.external_key.read_text(), "EXTERNAL-MEDIA-UNCHANGED")
+        self.assertEqual(self.orchestrator_calls.read_text(), "called\n")
+        again = self.invoke()
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertIn("already completed", again.stdout)
+        self.assertEqual(self.orchestrator_calls.read_text(), "called\n")
+
+    def test_failure_retains_retry_inputs_and_does_not_mark_success(self):
+        failed = self.invoke(status=37)
+        self.assertEqual(failed.returncode, 37, failed.stderr)
+        self.assertFalse(self.marker.exists())
+        self.assertTrue(all(path.is_file() for path in self.sensitive))
+        self.assertFalse(self.systemctl_calls.exists())
+        retried = self.invoke()
+        self.assertEqual(retried.returncode, 0, retried.stderr)
+        self.assertTrue(self.marker.exists())
+        self.assertTrue(all(not path.exists() for path in self.sensitive))
+        self.assertEqual(self.orchestrator_calls.read_text(), "called\ncalled\n")
+
+    def test_autoreboot_only_after_secrets_are_removed(self):
+        (self.live_root / "server-autoreboot").touch()
+        result = self.invoke(gum=1)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.marker.exists())
+        self.assertEqual(self.systemctl_calls.read_text(), "reboot\n")
+        self.assertTrue(all(not path.exists() for path in self.sensitive))
+
+    def test_interactive_reboot_yes_still_reboots(self):
+        result = self.invoke(gum=0)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.systemctl_calls.read_text(), "reboot\n")
+
+    def test_failed_cleanup_does_not_mark_or_reboot(self):
+        blocking = self.sensitive[0]
+        blocking.unlink()
+        blocking.mkdir()
+        result = self.invoke(gum=0)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.marker.exists())
+        self.assertFalse(self.systemctl_calls.exists())
+        self.assertTrue(blocking.is_dir())
+
+
 if __name__ == "__main__":
     unittest.main()
