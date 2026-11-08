@@ -732,3 +732,33 @@ Physical hardware, multiweek production operation and independent offsite
 host-loss recovery are not established by this qualification. Moving package
 repositories and per-build filesystem identities prevent a byte-identical
 future-build promise. Test repositories were not published to the live channel.
+
+## Source and harness review — 2026-11-08 (not ISO-qualified)
+
+At the signed `b7072ce` checkpoint, the checkout, upstream runtime pin
+`84782475aeb885c8d05f9e85b6ad0f1a0add60e5` and matching signed
+`omarchy-server 0.2.0-3` repository were verified. The hosted fork branch was
+still at `aaebfdc`; these validation changes remain local.
+
+A QEMU startup-failure regression demonstrated that retaining the exception
+traceback from a failed `pexpect.spawn` could retain the guest SSH port lock.
+The constructor now closes the child (if spawned), serial log, QMP control
+directory and port guard on this failure. A test retains the traceback while
+requiring a second handle to acquire the same lock.
+
+After this fix, all **134 server tests passed** in the seven source suites;
+the shared suite ran **388 tests (385 passed, 3 skipped)** against the pinned
+runtime. The signed `0.2.0-3` package channel verified against the unchanged
+package recipes. A live QEMU QMP version/status round trip passed. Disposable
+QCOW2 testing passed interrupted-finalization journal recovery, idempotent
+resume and refusal of changed disk bytes. `git diff --check` passed.
+
+A fresh ISO build and release guest matrix were **not run**. The build-space
+preflight refused a proposed new cache/output generation on the shared
+filesystem: approximately **9.20 GiB** free versus a **12 GiB** minimum,
+short by approximately **2.80 GiB** before build and guest disk growth.
+Release guest execution separately requires at least 8 GiB free at each
+case boundary. No prior ISO, signed repository, accepted disk, build cache or
+release evidence was discarded. The historical November 7 ISO does not
+qualify these later source changes, and no new ISO or final acceptance JSON
+was produced. Secure Boot and public IPv6 deployment remain deferred.

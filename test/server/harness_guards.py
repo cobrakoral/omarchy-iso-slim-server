@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Protect accepted disk graphs, source provenance and seed-media identity."""
+import fcntl
 import hashlib
 import importlib.util
 import json
@@ -40,6 +41,32 @@ class QmpShutdownTests(unittest.TestCase):
         vm.log.close.assert_called_once_with()
         vm.control.cleanup.assert_called_once_with()
         vm.port_guard.close.assert_called_once_with()
+
+    def test_spawn_failure_releases_port_with_retained_exception(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                probe.bind(("127.0.0.1", 0))
+                port = probe.getsockname()[1]
+            # Keep the original traceback alive: otherwise CPython's
+            # refcounting can accidentally hide a leaked constructor lock.
+            retained_error = None
+            with patch.object(
+                qemu.shutil, "copy", side_effect=lambda _src, dst: Path(dst).write_bytes(b"firmware")
+            ):
+                try:
+                    with patch.object(
+                        qemu.pexpect, "spawn", side_effect=OSError("injected spawn failure")
+                    ):
+                        qemu.VM(directory, directory / "unused.qcow2", port, [])
+                except OSError as error:
+                    retained_error = error
+            self.assertIsNotNone(retained_error)
+            guard = Path(tempfile.gettempdir()) / f"omarchy-qemu-ports-{os.getuid()}" / str(port)
+            with guard.open("a") as second:
+                fcntl.flock(second, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assertEqual(len(list(directory.glob("serial-*.log"))), 1)
+            del retained_error
 
 
 class SourceHashTests(unittest.TestCase):

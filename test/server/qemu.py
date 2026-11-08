@@ -239,14 +239,25 @@ class VM:
         if installer:
             args += ["-boot", "order=d"]
         self.log = (directory / f"serial-{time.time_ns()}.log").open("w")
-        self.child = pexpect.spawn(
-            "qemu-system-x86_64",
-            args,
-            encoding="utf-8",
-            codec_errors="replace",
-            timeout=900,
-        )
-        self.child.logfile = self.log
+        try:
+            self.child = pexpect.spawn(
+                "qemu-system-x86_64",
+                args,
+                encoding="utf-8",
+                codec_errors="replace",
+                timeout=900,
+            )
+            self.child.logfile = self.log
+        except BaseException:
+            # Startup failed before the caller could use stop(). Release all
+            # resources even if the exception is retained or one close fails.
+            with ExitStack() as cleanup:
+                cleanup.callback(self.port_guard.close)
+                cleanup.callback(self.control.cleanup)
+                cleanup.callback(self.log.close)
+                if hasattr(self, "child"):
+                    cleanup.callback(self.child.close, force=True)
+            raise
 
     def stop(self, *, require_clean=False):
         with ExitStack() as cleanup:
