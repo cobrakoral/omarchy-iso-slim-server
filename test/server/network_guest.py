@@ -112,8 +112,17 @@ def baseline(args):
     assert "kbdinteractiveauthentication no" in config
     assert "permitrootlogin no" in config
     listeners = command("ss", "-H", "-lntup")
-    # Record the complete IPv4/IPv6 exposure, including stock resolved multicast.
+    # Only SSH is deliberately exposed. Resolved must not bind 5353/5355.
     assert "0.0.0.0:22" in listeners and "[::]:22" in listeners, listeners
+    assert not any(f":{port} " in listeners for port in (5353, 5355)), listeners
+    assert "Global: no" in command("resolvectl", "llmnr")
+    assert "Global: no" in command("resolvectl", "mdns")
+    command("systemctl", "is-enabled", "nftables")
+    rules = command("nft", "list", "table", "inet", "omarchy_server_filter")
+    assert "policy drop" in rules and "tcp dport 22 accept" in rules
+    assert "udp sport 67 udp dport 68 accept" in rules
+    assert "udp sport 547 udp dport 546 accept" in rules
+    assert "icmpv6 type" in rules
     record(
         "baseline",
         {

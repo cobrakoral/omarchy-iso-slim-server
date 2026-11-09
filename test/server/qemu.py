@@ -514,6 +514,22 @@ def main():
         evidence = vm.sudo("""
 set -e
 systemctl is-active systemd-networkd systemd-resolved sshd
+# nftables.service is Type=oneshot without RemainAfterExit. Assert enablement
+# and that the kernel actually holds the rules, not "systemctl is-active".
+systemctl is-enabled nftables
+test -f /etc/nftables.conf
+nft -c -f /etc/nftables.conf
+nft list table inet omarchy_server_filter | grep -F 'tcp dport 22 accept'
+nft list table inet omarchy_server_filter | grep -F 'udp sport 67 udp dport 68 accept'
+nft list table inet omarchy_server_filter | grep -F 'udp sport 547 udp dport 546 accept'
+nft list table inet omarchy_server_filter | grep -F 'icmpv6 type'
+grep -Fx 'LLMNR=no' /etc/systemd/resolved.conf.d/90-omarchy-server-no-multicast.conf
+grep -Fx 'MulticastDNS=no' /etc/systemd/resolved.conf.d/90-omarchy-server-no-multicast.conf
+grep -Fx 'LLMNR=no' /etc/systemd/network/20-omarchy-server.network
+grep -Fx 'MulticastDNS=no' /etc/systemd/network/20-omarchy-server.network
+resolvectl llmnr | grep -Fx 'Global: no'
+resolvectl mdns | grep -Fx 'Global: no'
+! ss -H -lun | awk '{print $5}' | grep -Eq ':(5353|5355)$'
 test -f /etc/systemd/logind.conf.d/90-omarchy-server-power-button.conf
 grep -Fx 'HandlePowerKey=poweroff' /etc/systemd/logind.conf.d/90-omarchy-server-power-button.conf
 busctl get-property org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager HandlePowerKey | grep -Fx 's "poweroff"'
@@ -578,7 +594,7 @@ cat /boot/limine.conf
             "packages": installed_packages,
             "disk": str(disk),
             "iso": str(opts.iso.resolve()),
-            "checks": "boot, console password, key SSH, networkd, resolved, no egress, package exclusions, snapshot creation and boot entries, cloud-init selection",
+            "checks": "boot, console password, key SSH, networkd, resolved, disabled LLMNR/mDNS, active dual-stack nftables policy, no egress, package exclusions, snapshot creation and boot entries, cloud-init selection",
         }
     finally:
         vm.stop(require_clean=True)

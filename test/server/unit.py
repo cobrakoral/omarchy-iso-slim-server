@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import importlib.util
+import shutil
+import subprocess
 from pathlib import Path
 import unittest
 import sys
@@ -124,6 +126,8 @@ class ServerTests(unittest.TestCase):
         text = config.network_config({})
         self.assertIn("DHCP=yes", text)
         self.assertIn("IPv6AcceptRA=yes", text)
+        self.assertIn("LLMNR=no", text)
+        self.assertIn("MulticastDNS=no", text)
         self.assertNotIn("Name=", text)
 
     def test_static_ipv4_and_ipv6_dns(self):
@@ -138,6 +142,9 @@ class ServerTests(unittest.TestCase):
         )
         self.assertIn("DHCP=ipv6", text)
         self.assertIn("DNS=2001:db8::53", text)
+        self.assertIn("DHCP=ipv6", text)
+        self.assertIn("LLMNR=no", text)
+        self.assertIn("MulticastDNS=no", text)
 
     def test_refuse_bad_network_before_disk_work(self):
         for kw in [
@@ -257,6 +264,104 @@ class ServerKeyringTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 server.populate_server_keyring(ctx)
         run.assert_called_once()
+
+
+
+class NetworkSecurityPolicyTests(unittest.TestCase):
+    """Source-only dual-stack security checks, never touching the host firewall."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.policy = ROOT / "builder/server/security/nftables.conf"
+        cls.resolver = ROOT / "builder/server/security/resolved.conf"
+
+    def test_default_deny_inbound_both_protocol_families(self):
+        rules = self.policy.read_text()
+        self.assertIn("table inet omarchy_server_filter", rules)
+        self.assertIn("type filter hook input priority filter; policy drop;", rules)
+        self.assertIn("type filter hook forward priority filter; policy drop;", rules)
+        self.assertIn("type filter hook output priority filter; policy accept;", rules)
+        self.assertIn('iifname "lo" accept', rules)
+        self.assertIn("ct state invalid drop", rules)
+        self.assertIn("ct state { established, related } accept", rules)
+        self.assertIn("tcp dport 22 accept", rules)
+        self.assertIn("meta nfproto ipv4 udp sport 67 udp dport 68 accept", rules)
+        self.assertIn("meta nfproto ipv6 udp sport 547 udp dport 546 accept", rules)
+        self.assertIn("meta nfproto ipv4 icmp type", rules)
+        self.assertIn("meta nfproto ipv6 icmpv6 type", rules)
+        for name in ("nd-neighbor-solicit", "nd-neighbor-advert", "nd-router-advert",
+                     "nd-router-solicit", "packet-too-big", "mld2-listener-report"):
+            self.assertIn(name, rules)
+        # Avoid clobbering unrelated firewall tables on future servers.
+        self.assertNotIn("flush ruleset", rules)
+        self.assertNotIn("policy accept;", rules.split("chain input", 1)[1].split("chain forward", 1)[0])
+        self.assertNotIn("udp dport 5353 accept", rules)
+        self.assertNotIn("udp dport 5355 accept", rules)
+
+    def test_no_multicast_resolver_and_per_link_policies(self):
+        resolved = self.resolver.read_text()
+        self.assertIn("[Resolve]", resolved)
+        self.assertIn("LLMNR=no", resolved)
+        self.assertIn("MulticastDNS=no", resolved)
+        for name, answers in (("dhcp", {}), ("static", dict(
+            network="static", mac="52:54:00:12:34:56", address="192.0.2.4/24",
+            gateway="192.0.2.1", dns="192.0.2.53 2001:db8::53"))):
+            with self.subTest(mode=name):
+                text = config.network_config(answers)
+                self.assertIn("LLMNR=no", text)
+                self.assertIn("MulticastDNS=no", text)
+                self.assertIn("IPv6AcceptRA=yes", text)
+
+    def test_both_live_and_installed_policies_are_wired(self):
+        build = (ROOT / "builder/server/build.sh").read_text()
+        self.assertIn('"$work/airootfs/etc/nftables.conf"', build)
+        self.assertIn('"$work/airootfs/usr/share/omarchy-iso/server-nftables.conf"', build)
+        self.assertIn('"$work/airootfs/etc/systemd/resolved.conf.d/90-omarchy-server-no-multicast.conf"', build)
+        self.assertIn('"$work/airootfs/etc/systemd/system/multi-user.target.wants/nftables.service"', build)
+        for name in ("target.packages", "live.packages"):
+            roots = (ROOT / "builder/server" / name).read_text().splitlines()
+            self.assertIn("nftables", roots)
+
+    def test_installer_provisions_target_without_live_host_mutation(self):
+        package = types.ModuleType("orchestrator")
+        package.__path__ = []
+        with patch.dict(sys.modules, {"orchestrator": package,
+                                     "orchestrator.phases_impl": types.SimpleNamespace()}):
+            server = load("orchestrator.security_test",
+                          "configs/airootfs/usr/share/omarchy-iso/orchestrator/server.py")
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            ctx = types.SimpleNamespace(target=target)
+            with patch.object(server, "chroot") as chroot:
+                # The live ISO contains these files under server-*.conf.
+                # Mock only the path mapping, not the installed payload.
+                with tempfile.TemporaryDirectory() as bundle:
+                    bundle_path = Path(bundle)
+                    shutil.copy2(self.policy, bundle_path / "server-nftables.conf")
+                    shutil.copy2(self.resolver, bundle_path / "server-resolved.conf")
+                    with patch.object(server, "SECURITY_CONFIG_DIR", bundle_path):
+                        server.configure_network_security(ctx)
+            self.assertEqual((target / "etc/nftables.conf").read_bytes(), self.policy.read_bytes())
+            self.assertEqual(
+                (target / "etc/systemd/resolved.conf.d/90-omarchy-server-no-multicast.conf").read_bytes(),
+                self.resolver.read_bytes(),
+            )
+            self.assertEqual((target / "etc/nftables.conf").stat().st_mode & 0o777, 0o644)
+            chroot.assert_called_once_with(ctx, "nft", "-c", "-f", "/etc/nftables.conf")
+
+    def test_nft_parser_without_modifying_host_firewall(self):
+        if not shutil.which("nft") or not Path("/proc/self/ns/net").exists():
+            self.skipTest("nftables parser unavailable")
+        # nft -c validates in kernel space; if unprivileged, the dedicated
+        # isolated namespace integration check handles it on the VM.
+        if not shutil.which("sudo"):
+            self.skipTest("sudo unavailable for read-only nft syntax check")
+        can_sudo = subprocess.run(["sudo", "-n", "true"], capture_output=True).returncode == 0
+        if not can_sudo:
+            self.skipTest("noninteractive CAP_NET_ADMIN unavailable")
+        result = subprocess.run(["sudo", "-n", "nft", "-c", "-f", str(self.policy)],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":
