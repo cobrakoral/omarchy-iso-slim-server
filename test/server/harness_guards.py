@@ -109,6 +109,65 @@ class QmpShutdownTests(unittest.TestCase):
             self.assertEqual(list(directory.glob("serial-*.log")), [])
             del retained_error
 
+
+class SnapshotSyncReadinessTests(unittest.TestCase):
+    def test_accepts_verified_snapshot_menu_entry(self):
+        vm = Mock()
+        vm.sudo.side_effect = ["1\n", "Updated", "rootflags=subvol=/@/.snapshots/1/snapshot"]
+        qemu.verify_snapshot_sync(vm)
+        self.assertEqual(vm.sudo.call_count, 3)
+        self.assertIn("/.snapshots/1/snapshot", vm.sudo.call_args.args[0])
+
+    def test_retries_only_known_transient_list_race(self):
+        vm = Mock()
+        vm.sudo.side_effect = [
+            "7\n", RuntimeError("Snapper returned an empty snapshot list"),
+            "Updated", "rootflags=subvol=/@/.snapshots/7/snapshot",
+        ]
+        with patch.object(qemu.time, "sleep") as sleep:
+            qemu.verify_snapshot_sync(vm)
+        sleep.assert_called_once_with(1)
+        self.assertEqual(vm.sudo.call_count, 4)
+
+    def test_unrelated_error_fails_closed_without_retry(self):
+        vm = Mock()
+        vm.sudo.side_effect = ["5", RuntimeError("snapshot sync failed: invalid boot partition")]
+        with patch.object(qemu.time, "sleep") as sleep:
+            with self.assertRaisesRegex(RuntimeError, "invalid boot partition"):
+                qemu.verify_snapshot_sync(vm)
+        sleep.assert_not_called()
+
+    def test_known_transient_exhaustion_still_fails(self):
+        vm = Mock()
+        vm.sudo.side_effect = ["2"] + [RuntimeError("Snapper returned an empty snapshot list")]*4
+        with patch.object(qemu.time, "sleep") as sleep:
+            with self.assertRaisesRegex(RuntimeError, "empty snapshot list"):
+                qemu.verify_snapshot_sync(vm)
+        self.assertEqual(sleep.call_count, 3)
+
+    def test_missing_snapshot_entry_not_accepted(self):
+        vm = Mock()
+        vm.sudo.side_effect = ["2", "Updated", RuntimeError("missing snapshot boot entry")]
+        with self.assertRaisesRegex(RuntimeError, "missing snapshot boot entry"):
+            qemu.verify_snapshot_sync(vm)
+        self.assertEqual(vm.sudo.call_count, 3)
+
+    def test_guest_acceptance_uses_production_dbus_snapper(self):
+        source = (ROOT / "test/server/qemu.py").read_text()
+        self.assertIn('snapper -c root create -c number -d acceptance --print-number', source)
+        self.assertIn('snapper -c root list', source)
+        self.assertNotIn('snapper --no-dbus -c root create -c number -d acceptance', source)
+
+    def test_invalid_snapshot_number_rejected_before_sync(self):
+        for number in ("", "0", "not-a-number", "-1"):
+            with self.subTest(number=number):
+                vm = Mock()
+                vm.sudo.return_value = number
+                with self.assertRaisesRegex(RuntimeError, "valid numbered snapshot"):
+                    qemu.verify_snapshot_sync(vm)
+                vm.sudo.assert_called_once()
+
+
 class SourceHashTests(unittest.TestCase):
     def test_parent_build_directory_names_do_not_hide_sources(self):
         with tempfile.TemporaryDirectory() as name:

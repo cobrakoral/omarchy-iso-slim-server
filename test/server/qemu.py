@@ -342,6 +342,36 @@ class VM:
         raise RuntimeError("SSH did not become available")
 
 
+
+def verify_snapshot_sync(vm):
+    """Require an actual Limine boot entry; tolerate only known Snapper startup lag.
+
+    Exercise the production Snapper D-Bus interface rather than the direct
+    --no-dbus test shortcut, which can leave the snapshot watcher seeing an
+    empty list immediately after creation. If the watcher still reports its
+    recognized startup lag, retry only that case and verify the actual boot
+    entry in the generated Limine menu. Never suppress unrelated failures.
+    """
+    number = vm.sudo("cat /var/log/server-test-snapshot").strip()
+    if not number.isdecimal() or int(number) <= 0:
+        raise RuntimeError("Snapshot creation returned no valid numbered snapshot")
+    menu_entry = f"rootflags=subvol=/@/.snapshots/{number}/snapshot"
+    for attempt in range(1, 5):
+        try:
+            vm.sudo("limine-snapper-sync")
+        except RuntimeError as error:
+            if "Snapper returned an empty snapshot list" not in str(error) or attempt == 4:
+                raise
+            print(f"SNAPSHOT_SYNC_TRANSIENT_RETRY {attempt}/4", flush=True)
+            time.sleep(attempt)
+            continue
+        # Never accept a successful command if its snapshot boot entry is missing.
+        vm.sudo("grep -F -- " + __import__("shlex").quote(menu_entry) + " /boot/limine.conf")
+        print(f"SNAPSHOT_BOOT_ENTRY_VERIFIED {number}", flush=True)
+        return
+    raise RuntimeError("Snapshot sync did not converge")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("iso", type=Path)
@@ -547,19 +577,18 @@ sshd -T | grep -Fxi 'passwordauthentication no'
 findmnt -no FSTYPE / | grep -Fx btrfs
 findmnt -no OPTIONS / | grep 'subvol=/@'
 btrfs subvolume list /
-snapper --no-dbus -c root list
+snapper -c root list
 cmp /etc/snapper/configs/root /usr/share/omarchy/default/snapper/root
 test ! -e /etc/installer-cidata-was-reused
 expect_failure timeout 4 bash -c '</dev/tcp/1.1.1.1/443'
 pacman -Q | tee /var/log/server-acceptance-packages.log
 printf 'PACKAGE_COUNT='; pacman -Qq | wc -l
 printf baseline > /etc/rollback-proof
-snapper --no-dbus -c root create -c number -d acceptance --print-number > /var/log/server-test-snapshot
+snapper -c root create -c number -d acceptance --print-number > /var/log/server-test-snapshot
 printf changed > /etc/rollback-proof
-limine-snapper-sync
-find /boot -maxdepth 3 -type f
-cat /boot/limine.conf
 """)
+        verify_snapshot_sync(vm)
+        evidence += vm.sudo("find /boot -maxdepth 3 -type f; cat /boot/limine.conf")
         if opts.static:
             evidence += vm.sudo("ip -4 route | grep 'default via 10.0.2.2'")
         (directory / "acceptance.txt").write_text(evidence)
