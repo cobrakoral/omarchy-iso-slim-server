@@ -340,13 +340,18 @@ is erased only after confirmation and input/media validation. The minimum
 disk size is 12 GiB; the standard ESP remains 2 GiB.
 
 LUKS and cloud-init both default to **No**. The administrator always has a
-password for local console login and sudo. The interactive installer accepts
-administrator passwords with **at least 8 characters**. Its Gum dialog keeps
-the wizard open and asks again if the password is too short or its confirmation
-differs. An optional LUKS passphrase has the same 8-character minimum and
-retry behavior; cancelling the dialog still exits installation deliberately.
-With valid public keys, SSH uses key-only authentication; without keys, SSH
-password access remains enabled.
+password for local console login and sudo. **Eight or more characters are
+recommended, not enforced.** The Gum wizard flags shorter passwords and common
+weak patterns. After the user re-enters the same password, a warning asks
+whether to **Use Anyway** or **Choose Another** (No is the default). Explicitly
+accepting the warning allows a nonempty weak password. Choosing another
+password or entering mismatched confirmations repeats only the password step;
+an empty password is refused. The same optional-warning behavior applies to
+LUKS passphrases. Weak LUKS passphrases materially reduce protection of the
+encrypted disk; use long, unique passphrases when practical. Cancelling the
+password dialog still exits installation deliberately. With valid public keys,
+SSH uses key-only authentication; without keys, SSH password access remains
+enabled.
 Root SSH login and keyboard-interactive authentication are disabled. Every
 installation initializes a unique machine ID, pacman keyring, and SSH host
 keys. No account, password, private key or fixed machine identity is baked
