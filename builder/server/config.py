@@ -77,7 +77,10 @@ def network_config(answers):
         lines += [f"MACAddress={mac.lower()}"]
     else:
         lines += ["Path=*"]
-    lines += ["", "[Network]", "IPv6AcceptRA=yes", "LinkLocalAddressing=ipv6"]
+    lines += [
+        "", "[Network]", "IPv6AcceptRA=yes", "LinkLocalAddressing=ipv6",
+        "LLMNR=no", "MulticastDNS=no",
+    ]
     if mode == "dhcp":
         lines += ["DHCP=yes"]
     else:

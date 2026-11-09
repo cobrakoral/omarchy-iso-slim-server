@@ -13,6 +13,7 @@ archlinux-keyring
 omarchy-keyring
 sudo
 openssh
+nftables
 btrfs-progs
 snapper
 inotify-tools

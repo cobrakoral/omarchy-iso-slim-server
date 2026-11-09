@@ -39,6 +39,15 @@ mkdir -p "$work/airootfs/usr/share/omarchy-iso"
 cp /builder/server/config.py "$work/airootfs/usr/share/omarchy-iso/server_config.py"
 install -Dm644 /builder/server/logind.conf "$work/airootfs/usr/share/omarchy-iso/server-logind.conf"
 install -Dm644 /builder/server/logind.conf "$work/airootfs/etc/systemd/logind.conf.d/90-omarchy-server-power-button.conf"
+# Live ISO policy: no LLMNR/mDNS, default-deny IPv4/IPv6 incoming traffic.
+# nftables.service is an early network-pre.service dependency and applies the
+# rules before live networking starts. Nothing is enabled on the build host.
+install -Dm644 /builder/server/security/resolved.conf "$work/airootfs/etc/systemd/resolved.conf.d/90-omarchy-server-no-multicast.conf"
+install -Dm644 /builder/server/security/nftables.conf "$work/airootfs/etc/nftables.conf"
+install -Dm644 /builder/server/security/nftables.conf "$work/airootfs/usr/share/omarchy-iso/server-nftables.conf"
+install -Dm644 /builder/server/security/resolved.conf "$work/airootfs/usr/share/omarchy-iso/server-resolved.conf"
+mkdir -p "$work/airootfs/etc/systemd/system/multi-user.target.wants"
+ln -sfn /usr/lib/systemd/system/nftables.service "$work/airootfs/etc/systemd/system/multi-user.target.wants/nftables.service"
 # Installed systems retain the signed server channel, independently of the build mirror.
 sed '/^\[options\]/a CheckSpace' "$online" > "$work/airootfs/usr/share/omarchy-iso/server-online.conf"
 printf '\nInclude = /etc/pacman.d/omarchy-server.conf\n' >> "$work/airootfs/usr/share/omarchy-iso/server-online.conf"

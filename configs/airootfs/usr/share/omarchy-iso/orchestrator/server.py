@@ -177,11 +177,32 @@ def configure_power_button(ctx):
     )
 
 
+# Builder ships the same reviewed policy for the live installer and target.
+SECURITY_CONFIG_DIR = Path("/usr/share/omarchy-iso")
+
+
+def configure_network_security(ctx):
+    write(
+        ctx,
+        "etc/systemd/resolved.conf.d/90-omarchy-server-no-multicast.conf",
+        (SECURITY_CONFIG_DIR / "server-resolved.conf").read_text(),
+    )
+    write(
+        ctx,
+        "etc/nftables.conf",
+        (SECURITY_CONFIG_DIR / "server-nftables.conf").read_text(),
+        0o644,
+    )
+    # The check validates nft syntax but cannot modify the live host ruleset.
+    chroot(ctx, "nft", "-c", "-f", "/etc/nftables.conf")
+
+
 def configure(ctx):
     from server_config import network_config
 
     write(ctx, "etc/omarchy-edition", "server\n")
     configure_power_button(ctx)
+    configure_network_security(ctx)
     write(
         ctx,
         "etc/systemd/network/20-omarchy-server.network",
@@ -196,6 +217,7 @@ def configure(ctx):
         "enable",
         "systemd-networkd",
         "systemd-resolved",
+        "nftables",
         "sshd",
         "systemd-timesyncd",
     )
@@ -312,11 +334,13 @@ def validate_target(ctx):
     for unit in (
         "systemd-networkd",
         "systemd-resolved",
+        "nftables",
         "sshd",
         "snapper-cleanup.timer",
         "limine-snapper-sync",
     ):
         chroot(ctx, "systemctl", "is-enabled", unit)
+    chroot(ctx, "nft", "-c", "-f", "/etc/nftables.conf")
     if (ctx.target / "etc/NetworkManager").exists():
         raise ValueError("NetworkManager must not be configured")
 

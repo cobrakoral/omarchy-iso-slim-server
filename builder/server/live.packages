@@ -20,6 +20,7 @@ mtools
 gum
 jq
 openssh
+nftables
 openssl
 sudo
 vi
