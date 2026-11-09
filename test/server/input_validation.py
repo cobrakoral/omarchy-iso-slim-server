@@ -4,6 +4,7 @@ import copy
 import importlib.util
 import json
 import os
+import shlex
 from pathlib import Path
 import subprocess
 import sys
@@ -381,6 +382,129 @@ class InputValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "kernel disk sequence"):
             self.server.validate(self.ctx)
         self.assertEqual(self.cleanup_calls, [])
+
+
+class PasswordDialogueTests(unittest.TestCase):
+    """Exercise the shipped Bash/Gum password dialog without any real secrets."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory(prefix="omarchy-password-dialog-")
+        self.addCleanup(temp.cleanup)
+        self.directory = Path(temp.name)
+        self.gum = self.directory / "gum"
+        self.queue = self.directory / "queue.json"
+        self.prompts = self.directory / "prompts.json"
+        self.gum.write_text("""#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import sys
+
+if sys.argv[1:3] != ['input', '--password']:
+    raise SystemExit('Only private Gum password input is supported')
+args = sys.argv[1:]
+header = args[args.index('--header') + 1]
+queue_path = Path(os.environ['MOCK_GUM_QUEUE'])
+entries = json.loads(queue_path.read_text())
+if not entries:
+    raise SystemExit('Unexpected extra password prompt')
+item = entries.pop(0)
+queue_path.write_text(json.dumps(entries))
+prompts_path = Path(os.environ['MOCK_GUM_PROMPTS'])
+prompts = json.loads(prompts_path.read_text())
+prompts.append(header)
+prompts_path.write_text(json.dumps(prompts))
+if item.get('cancel'):
+    raise SystemExit(130)
+sys.stdout.write(item['answer'])
+""")
+        self.gum.chmod(0o700)
+        source = (ROOT / "builder/server/configurator").read_text()
+        self.assertIn("prompt_secret() {", source)
+        self.function = "prompt_secret() {" + source.split("prompt_secret() {", 1)[1].split("\n}\n", 1)[0] + "\n}"
+
+    def attempt(self, answers, label="Administrator password (console and sudo)", confirmation="Confirm password"):
+        self.queue.write_text(json.dumps(answers))
+        self.prompts.write_text("[]")
+        self.queue.chmod(0o600)
+        env = dict(os.environ, PATH=str(self.directory) + os.pathsep + os.environ["PATH"],
+                   MOCK_GUM_QUEUE=str(self.queue), MOCK_GUM_PROMPTS=str(self.prompts))
+        script = (
+            "set -euo pipefail\n" + self.function +
+            "\nPASSWORD_REPLY=''\n" +
+            f"prompt_secret {shlex.quote(label)} {shlex.quote(confirmation)}\n" +
+            "[[ ${#PASSWORD_REPLY} -ge 8 ]]\n" +
+            "printf 'PASSWORD_DIALOG_ACCEPTED\n'\n"
+        )
+        return subprocess.run(["bash", "-c", script], env=env, text=True,
+                              capture_output=True)
+
+    def test_administrator_seven_characters_retries_eight_are_accepted(self):
+        result = self.attempt([{'answer': '1234567'}, {'answer': '12345678'},
+                               {'answer': '12345678'}])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('PASSWORD_DIALOG_ACCEPTED', result.stdout)
+        self.assertIn('Use at least 8 characters', result.stderr)
+        prompts = json.loads(self.prompts.read_text())
+        self.assertEqual(len(prompts), 3)
+        self.assertIn('minimum 8 characters', prompts[0])
+        self.assertIn('Too short, please try again', prompts[1])
+        self.assertEqual(json.loads(self.queue.read_text()), [])
+
+    def test_mismatch_restarts_only_password_dialog(self):
+        result = self.attempt([{'answer': 'Correct-8'}, {'answer': 'Not-Match'},
+                               {'answer': 'Correct-8'}, {'answer': 'Correct-8'}])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Passwords do not match', result.stderr)
+        prompts = json.loads(self.prompts.read_text())
+        self.assertEqual(len(prompts), 4)
+        self.assertIn('Confirmation differs, please try again', prompts[2])
+
+    def test_luks_passphrase_has_same_minimum_and_retry(self):
+        result = self.attempt([{'answer': 'short'}, {'answer': 'Pass1234'},
+                               {'answer': 'wrong-123'}, {'answer': 'Pass1234'},
+                               {'answer': 'Pass1234'}],
+                              label='LUKS passphrase', confirmation='Confirm LUKS passphrase')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Use at least 8 characters', result.stderr)
+        self.assertIn('Passwords do not match', result.stderr)
+        prompts = json.loads(self.prompts.read_text())
+        self.assertEqual(len(prompts), 5)
+        self.assertTrue(all('LUKS' in prompt for prompt in prompts))
+
+    def test_cancel_administrator_input_exits_without_retries(self):
+        result = self.attempt([{'cancel': True}])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Password entry cancelled', result.stderr)
+        self.assertEqual(len(json.loads(self.prompts.read_text())), 1)
+
+    def test_cancel_confirmation_does_not_retry(self):
+        result = self.attempt([{'answer': 'eightplus'}, {'cancel': True}])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Password confirmation cancelled', result.stderr)
+        self.assertEqual(len(json.loads(self.prompts.read_text())), 2)
+
+    def test_empty_password_is_reprompted(self):
+        result = self.attempt([{'answer': ''}, {'answer': 'Valid8!!'},
+                               {'answer': 'Valid8!!'}])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Use at least 8 characters', result.stderr)
+        self.assertEqual(len(json.loads(self.prompts.read_text())), 3)
+
+    def test_administrator_and_luks_use_same_retry_helper(self):
+        source = (ROOT / "builder/server/configurator").read_text()
+        self.assertIn("prompt_secret 'Administrator password (console and sudo)' 'Confirm password'", source)
+        self.assertIn("prompt_secret 'LUKS passphrase' 'Confirm LUKS passphrase'", source)
+        self.assertNotIn('Use at least 12 characters', source)
+
+    def test_password_not_printed_in_success_or_error(self):
+        secret = 'Unique_Test_Secret_12345!!'
+        result = self.attempt([{'answer': secret}, {'answer': secret}])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(secret, result.stdout)
+        self.assertNotIn(secret, result.stderr)
+        self.assertIn('PASSWORD_DIALOG_ACCEPTED', result.stdout)
+
 
 
 class DiskSignatureCleanupTests(unittest.TestCase):

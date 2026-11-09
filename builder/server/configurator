@@ -2,7 +2,7 @@
 # Bash/Gum text front end to the shared Archinstall orchestrator.
 set -euo pipefail
 umask 077
-trap 'unset password password_hash passphrase; rm -f /run/server-answers.json' EXIT
+trap 'unset password password_hash passphrase PASSWORD_REPLY; rm -f /run/server-answers.json' EXIT
 export GUM_INPUT_SHOW_HELP=false GUM_CHOOSE_SHOW_HELP=false
 printf 'Omarchy Slim Server — unofficial edition\nAll packages install offline. The selected disk will be erased.\n'
 locale=$(python /usr/share/omarchy-iso/server_config.py --list-locales | gum filter --header 'System language / locale (default en_US.UTF-8)' --value en_US.UTF-8)
@@ -10,10 +10,42 @@ keyboard=$(localectl list-keymaps | gum filter --header 'Console keyboard layout
 loadkeys "$keyboard"
 hostname=$(gum input --header Hostname --value omarchy-server)
 username=$(gum input --header 'Administrator username' --value admin)
-password=$(gum input --password --header 'Administrator password (console and sudo)')
-[[ ${#password} -ge 12 ]] || { echo 'Use at least 12 characters.' >&2; exit 1; }
-[[ $password == "$(gum input --password --header 'Confirm password')" ]] || { echo 'Passwords differ.' >&2; exit 1; }
-password_hash=$(printf '%s' "$password" | openssl passwd -6 -stdin); unset password
+# Invalid credentials must only restart their own prompt, not abort the wizard.
+# The prompt helper keeps raw password text out of stdout and diagnostic logs.
+prompt_secret() {
+  local description=$1 confirmation=$2 candidate repeated hint=''
+  while :; do
+    if ! candidate=$(gum input --password --header "$description (minimum 8 characters)${hint:+ — $hint}"); then
+      printf 'Password entry cancelled.\n' >&2
+      return 1
+    fi
+    if ((${#candidate} < 8)); then
+      hint='Too short, please try again'
+      printf 'Use at least 8 characters. Please try again.\n' >&2
+      unset candidate
+      continue
+    fi
+    if ! repeated=$(gum input --password --header "$confirmation"); then
+      printf 'Password confirmation cancelled.\n' >&2
+      unset candidate
+      return 1
+    fi
+    if [[ $candidate != "$repeated" ]]; then
+      hint='Confirmation differs, please try again'
+      printf 'Passwords do not match. Please try again.\n' >&2
+      unset candidate repeated
+      continue
+    fi
+    PASSWORD_REPLY=$candidate
+    unset candidate repeated
+    return 0
+  done
+}
+
+PASSWORD_REPLY=''
+prompt_secret 'Administrator password (console and sudo)' 'Confirm password'
+password_hash=$(printf '%s' "$PASSWORD_REPLY" | openssl passwd -6 -stdin)
+unset PASSWORD_REPLY
 timezone=$(timedatectl list-timezones | gum filter --header Timezone --value UTC)
 network=$(gum choose --header Networking dhcp static)
 address=''; gateway=''; dns=''; mac=''
@@ -33,8 +65,9 @@ fi
 encrypt=false; passphrase=''
 if gum confirm --default=false 'Encrypt the disk with LUKS? (default No)'; then
   encrypt=true
-  passphrase=$(gum input --password --header 'LUKS passphrase')
-  [[ ${#passphrase} -ge 12 && $passphrase == "$(gum input --password --header 'Confirm LUKS passphrase')" ]] || { echo 'Passphrases differ or are too short.' >&2; exit 1; }
+  prompt_secret 'LUKS passphrase' 'Confirm LUKS passphrase'
+  passphrase=$PASSWORD_REPLY
+  unset PASSWORD_REPLY
 fi
 cloud_init=false
 if gum confirm --default=false 'Install cloud-init? (default No)'; then cloud_init=true; fi
