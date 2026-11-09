@@ -2,7 +2,7 @@
 # Bash/Gum text front end to the shared Archinstall orchestrator.
 set -euo pipefail
 umask 077
-trap 'unset password password_hash passphrase PASSWORD_REPLY; rm -f /run/server-answers.json' EXIT
+trap 'unset password password_hash passphrase PASSWORD_REPLY PASSWORD_WEAK_REASON; rm -f /run/server-answers.json' EXIT
 export GUM_INPUT_SHOW_HELP=false GUM_CHOOSE_SHOW_HELP=false
 printf 'Omarchy Slim Server — unofficial edition\nAll packages install offline. The selected disk will be erased.\n'
 locale=$(python /usr/share/omarchy-iso/server_config.py --list-locales | gum filter --header 'System language / locale (default en_US.UTF-8)' --value en_US.UTF-8)
@@ -10,19 +10,31 @@ keyboard=$(localectl list-keymaps | gum filter --header 'Console keyboard layout
 loadkeys "$keyboard"
 hostname=$(gum input --header Hostname --value omarchy-server)
 username=$(gum input --header 'Administrator username' --value admin)
-# Invalid credentials must only restart their own prompt, not abort the wizard.
-# The prompt helper keeps raw password text out of stdout and diagnostic logs.
+# A weak password is a conscious user choice, not an installer-fatal error.
+# Never print the password in diagnostics or pass it as a command argument.
+weak_password_reason() {
+  local candidate=$1 lowered=${1,,}
+  PASSWORD_WEAK_REASON=''
+  if ((${#candidate} < 8)); then
+    PASSWORD_WEAK_REASON='It has fewer than 8 characters.'
+  elif [[ $lowered =~ ^(password[0-9]*|senha[0-9]*|admin[0-9]*|qwerty[0-9]*|123456[0-9]*|letmein|welcome)$ ]]; then
+    PASSWORD_WEAK_REASON='It follows a very common password pattern.'
+  elif [[ $candidate =~ ^[0-9]+$ && ${#candidate} -lt 14 ]]; then
+    PASSWORD_WEAK_REASON='It uses only a short sequence of digits.'
+  fi
+  [[ -n $PASSWORD_WEAK_REASON ]]
+}
+
 prompt_secret() {
   local description=$1 confirmation=$2 candidate repeated hint=''
   while :; do
-    if ! candidate=$(gum input --password --header "$description (minimum 8 characters)${hint:+ — $hint}"); then
+    if ! candidate=$(gum input --password --header "$description (8+ characters recommended)${hint:+ — $hint}"); then
       printf 'Password entry cancelled.\n' >&2
       return 1
     fi
-    if ((${#candidate} < 8)); then
-      hint='Too short, please try again'
-      printf 'Use at least 8 characters. Please try again.\n' >&2
-      unset candidate
+    if [[ -z $candidate ]]; then
+      hint='Password cannot be empty'
+      printf 'Password cannot be empty. Please try again.\n' >&2
       continue
     fi
     if ! repeated=$(gum input --password --header "$confirmation"); then
@@ -36,8 +48,20 @@ prompt_secret() {
       unset candidate repeated
       continue
     fi
+    unset repeated
+    if weak_password_reason "$candidate"; then
+      # No weak password is accepted by default. A declined warning returns
+      # to password entry, without throwing away the rest of the wizard.
+      if ! gum confirm --default=false --affirmative 'Use Anyway' \
+          --negative 'Choose Another' \
+          "Weak password. $PASSWORD_WEAK_REASON Are you sure you want to use it?"; then
+        hint='Weak password declined, choose another'
+        unset candidate
+        continue
+      fi
+    fi
     PASSWORD_REPLY=$candidate
-    unset candidate repeated
+    unset candidate
     return 0
   done
 }

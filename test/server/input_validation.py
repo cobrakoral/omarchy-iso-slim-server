@@ -400,10 +400,17 @@ import os
 from pathlib import Path
 import sys
 
-if sys.argv[1:3] != ['input', '--password']:
-    raise SystemExit('Only private Gum password input is supported')
 args = sys.argv[1:]
-header = args[args.index('--header') + 1]
+if args[0] == 'input':
+    if args[1] != '--password':
+        raise SystemExit('Only private Gum password input is supported')
+    header = args[args.index('--header') + 1]
+elif args[0] == 'confirm':
+    if '--default=false' not in args or 'Use Anyway' not in args or 'Choose Another' not in args:
+        raise SystemExit('Weak confirmation must be explicitly opt-in')
+    header = 'WEAK_CONFIRM: ' + args[-1]
+else:
+    raise SystemExit('Unexpected Gum action')
 queue_path = Path(os.environ['MOCK_GUM_QUEUE'])
 entries = json.loads(queue_path.read_text())
 if not entries:
@@ -416,12 +423,21 @@ prompts.append(header)
 prompts_path.write_text(json.dumps(prompts))
 if item.get('cancel'):
     raise SystemExit(130)
+if args[0] == 'confirm':
+    if 'confirm' not in item:
+        raise SystemExit('Missing confirmation fixture')
+    raise SystemExit(0 if item['confirm'] else 1)
+if 'answer' not in item:
+    raise SystemExit('Expected password input fixture')
 sys.stdout.write(item['answer'])
 """)
         self.gum.chmod(0o700)
         source = (ROOT / "builder/server/configurator").read_text()
         self.assertIn("prompt_secret() {", source)
-        self.function = "prompt_secret() {" + source.split("prompt_secret() {", 1)[1].split("\n}\n", 1)[0] + "\n}"
+        self.assertIn("weak_password_reason() {", source)
+        reason = "weak_password_reason() {" + source.split("weak_password_reason() {", 1)[1].split("\n}\n", 1)[0] + "\n}"
+        prompt = "prompt_secret() {" + source.split("prompt_secret() {", 1)[1].split("\n}\n", 1)[0] + "\n}"
+        self.function = reason + "\n\n" + prompt
 
     def attempt(self, answers, label="Administrator password (console and sudo)", confirmation="Confirm password"):
         self.queue.write_text(json.dumps(answers))
@@ -433,44 +449,83 @@ sys.stdout.write(item['answer'])
             "set -euo pipefail\n" + self.function +
             "\nPASSWORD_REPLY=''\n" +
             f"prompt_secret {shlex.quote(label)} {shlex.quote(confirmation)}\n" +
-            "[[ ${#PASSWORD_REPLY} -ge 8 ]]\n" +
+            "[[ -n $PASSWORD_REPLY ]]\n" +
             "printf 'PASSWORD_DIALOG_ACCEPTED\n'\n"
         )
         return subprocess.run(["bash", "-c", script], env=env, text=True,
                               capture_output=True)
 
-    def test_administrator_seven_characters_retries_eight_are_accepted(self):
-        result = self.attempt([{'answer': '1234567'}, {'answer': '12345678'},
-                               {'answer': '12345678'}])
+    def test_short_password_accepted_after_explicit_weak_confirmation(self):
+        result = self.attempt([{'answer': 'short7!'}, {'answer': 'short7!'},
+                               {'confirm': True}])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('PASSWORD_DIALOG_ACCEPTED', result.stdout)
-        self.assertIn('Use at least 8 characters', result.stderr)
         prompts = json.loads(self.prompts.read_text())
         self.assertEqual(len(prompts), 3)
-        self.assertIn('minimum 8 characters', prompts[0])
-        self.assertIn('Too short, please try again', prompts[1])
+        self.assertIn('8+ characters recommended', prompts[0])
+        self.assertIn('WEAK_CONFIRM:', prompts[2])
+        self.assertIn('fewer than 8 characters', prompts[2])
+        self.assertIn('Are you sure', prompts[2])
+        self.assertNotIn('short7!', str(prompts))
         self.assertEqual(json.loads(self.queue.read_text()), [])
 
-    def test_mismatch_restarts_only_password_dialog(self):
-        result = self.attempt([{'answer': 'Correct-8'}, {'answer': 'Not-Match'},
-                               {'answer': 'Correct-8'}, {'answer': 'Correct-8'}])
+    def test_declining_weak_password_restarts_only_password_entry(self):
+        result = self.attempt([{'answer': 'short7!'}, {'answer': 'short7!'},
+                               {'confirm': False}, {'answer': 'Safe-Long-Phrase!'},
+                               {'answer': 'Safe-Long-Phrase!'}])
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('Passwords do not match', result.stderr)
         prompts = json.loads(self.prompts.read_text())
-        self.assertEqual(len(prompts), 4)
-        self.assertIn('Confirmation differs, please try again', prompts[2])
+        self.assertEqual(len(prompts), 5)
+        self.assertIn('Weak password declined', prompts[3])
+        self.assertEqual(sum('WEAK_CONFIRM:' in p for p in prompts), 1)
 
-    def test_luks_passphrase_has_same_minimum_and_retry(self):
-        result = self.attempt([{'answer': 'short'}, {'answer': 'Pass1234'},
-                               {'answer': 'wrong-123'}, {'answer': 'Pass1234'},
-                               {'answer': 'Pass1234'}],
-                              label='LUKS passphrase', confirmation='Confirm LUKS passphrase')
+    def test_common_password_longer_than_eight_also_warns(self):
+        result = self.attempt([{'answer': 'password1234'},
+                               {'answer': 'password1234'}, {'confirm': True}])
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('Use at least 8 characters', result.stderr)
+        self.assertIn('common password pattern', json.loads(self.prompts.read_text())[2])
+
+    def test_short_digits_trigger_warning(self):
+        result = self.attempt([{'answer': '12345678901'},
+                               {'answer': '12345678901'}, {'confirm': True}])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(json.loads(self.prompts.read_text())), 3)
+
+    def test_nontrivial_eight_character_password_needs_no_weak_confirmation(self):
+        result = self.attempt([{'answer': 'Rain7!Up'}, {'answer': 'Rain7!Up'}])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(json.loads(self.prompts.read_text())), 2)
+
+    def test_mismatch_restarts_before_weak_warning(self):
+        result = self.attempt([{'answer': 'short'}, {'answer': 'wrong'},
+                               {'answer': 'short'}, {'answer': 'short'},
+                               {'confirm': True}])
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('Passwords do not match', result.stderr)
         prompts = json.loads(self.prompts.read_text())
         self.assertEqual(len(prompts), 5)
-        self.assertTrue(all('LUKS' in prompt for prompt in prompts))
+        self.assertIn('Confirmation differs, please try again', prompts[2])
+        self.assertIn('WEAK_CONFIRM:', prompts[-1])
+
+    def test_luks_short_passphrase_can_be_approved(self):
+        result = self.attempt([{'answer': 'tiny'}, {'answer': 'tiny'},
+                               {'confirm': True}],
+                              label='LUKS passphrase', confirmation='Confirm LUKS passphrase')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        prompts = json.loads(self.prompts.read_text())
+        self.assertEqual(len(prompts), 3)
+        self.assertIn('LUKS passphrase', prompts[0])
+        self.assertIn('fewer than 8 characters', prompts[2])
+
+    def test_luks_decline_reasks_for_alternative(self):
+        result = self.attempt([{'answer': 'tiny'}, {'answer': 'tiny'},
+                               {'confirm': False}, {'answer': 'Unique+LUKS+Phrase'},
+                               {'answer': 'Unique+LUKS+Phrase'}],
+                              label='LUKS passphrase', confirmation='Confirm LUKS passphrase')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        prompts = json.loads(self.prompts.read_text())
+        self.assertEqual(len(prompts), 5)
+        self.assertIn('Weak password declined', prompts[3])
 
     def test_cancel_administrator_input_exits_without_retries(self):
         result = self.attempt([{'cancel': True}])
@@ -484,12 +539,14 @@ sys.stdout.write(item['answer'])
         self.assertIn('Password confirmation cancelled', result.stderr)
         self.assertEqual(len(json.loads(self.prompts.read_text())), 2)
 
-    def test_empty_password_is_reprompted(self):
-        result = self.attempt([{'answer': ''}, {'answer': 'Valid8!!'},
-                               {'answer': 'Valid8!!'}])
+    def test_empty_password_requires_a_nonempty_value(self):
+        result = self.attempt([{'answer': ''}, {'answer': 'Rain7!Up'},
+                               {'answer': 'Rain7!Up'}])
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('Use at least 8 characters', result.stderr)
-        self.assertEqual(len(json.loads(self.prompts.read_text())), 3)
+        self.assertIn('Password cannot be empty', result.stderr)
+        prompts = json.loads(self.prompts.read_text())
+        self.assertEqual(len(prompts), 3)
+        self.assertIn('Password cannot be empty', prompts[1])
 
     def test_administrator_and_luks_use_same_retry_helper(self):
         source = (ROOT / "builder/server/configurator").read_text()
