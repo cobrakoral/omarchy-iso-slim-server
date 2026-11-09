@@ -946,3 +946,33 @@ transcripts.
 The documentation-only checkpoint following release is **not** part of the
 qualified ISO source. Physical hardware, Proxmox, Secure Boot and public IPv6
 routing remain unverified; this is an unofficial community test image.
+
+## Local-only network hardening work: 2026-11-09 (no new ISO)
+
+The source branch now configures a baseline `nftables` firewall for the live
+installer and installed server and disables multicast name resolution
+(`LLMNR=no`, `MulticastDNS=no`) in global `systemd-resolved` and per-link
+`systemd-networkd` settings. The policy uses `inet` to cover IPv4 and IPv6;
+allows loopback, established traffic, SSH TCP/22, DHCPv4, DHCPv6 and necessary
+ICMP/ICMPv6; drops uninvited input and forwarding; and permits outbound
+traffic. The named `inet omarchy_server_filter` table does not clear unrelated
+rulesets. The server installer enables `nftables.service`, validates the
+configuration without loading it in the live host namespace, and checks the
+unit is enabled in the target. The build profile enables nftables early in the
+live boot. The package closure adds `nftables` as an explicit root dependency,
+which was already present as a transitive dependency in the prior target.
+
+Verification on OmarchyVM **only**: `nft -c` parsing, disposable `unshare`
+network and mount namespaces (never the host network namespace), synthetic
+IPv4+IPv6 listeners on TCP/22 and TCP/8080, dual-stack echo-request, permitted
+DHCPv4 (67->68), permitted DHCPv6 (547->546), and blocking unsolicited 8080 on
+both families after ruleset activation. The baseline phase verifies that both
+ports are reachable **before** the firewall is loaded, avoiding false-positive
+blocking results. Source unit tests also cover DHCP/static resolver options,
+target configuration, live staging and both-family firewall policy. The
+existing server regressions and Python/Bash syntax checks were rerun locally.
+
+**Release boundary:** No new ISO was built, no release/tag was created, and no
+Proxmox/physical-hardware boot was performed for this change. Published `test3`
+remains unchanged and therefore does not contain this firewall until a future
+explicitly authorized ISO build and qualification.

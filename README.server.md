@@ -350,6 +350,11 @@ into the delivered target image.
 ```sh
 ssh admin@server-address
 sudo systemctl status systemd-networkd systemd-resolved sshd
+# Available only in a server installation built from the new source revision:
+sudo systemctl is-enabled nftables
+sudo nft list table inet omarchy_server_filter
+resolvectl llmnr
+resolvectl mdns
 ```
 
 The installed system boots to the normal multi-user console. It does not
@@ -420,6 +425,53 @@ the default, including IPv6 DHCP and router advertisements. Static IPv4
 selects an interface by its persistent MAC address and requires an
 address/prefix, an on-link gateway and DNS addresses; IPv6
 router advertisements remain enabled. No second DHCP daemon is enabled.
+
+### Default server firewall and multicast-name resolution
+
+**Source change only until a new ISO is explicitly built.** The published
+`slim-server-2026.11.08-test3` ISO is unchanged and does not yet include this
+firewall hardening. Do not assume it has these defaults.
+
+New builds explicitly install `nftables` in both the live ISO and server root
+package closures. Their default ruleset is loaded by `nftables.service` before
+network initialization; the installed service is enabled on subsequent boots.
+The shared policy in `builder/server/security/nftables.conf` uses an `inet`
+table so **both IPv4 and IPv6** follow the same default-deny inbound and
+forward policy. Loopback, established/related traffic, and inbound SSH/TCP 22
+are allowed. Outbound traffic remains allowed. The policy explicitly permits
+IPv4 DHCP (UDP 67 to 68), IPv6 DHCPv6 (547 to 546), essential IPv4 ICMP,
+and IPv6 ICMP for neighbor discovery, router advertisements, path MTU and
+multicast listener discovery. Incoming IPv4 and IPv6 echo requests are allowed
+for host reachability checks; all other unsolicited inbound ports are denied.
+
+The live ISO and installed server set `LLMNR=no` and `MulticastDNS=no` in a
+`systemd-resolved` drop-in. The installer also sets these options explicitly
+on the generated DHCP/static `.network` file, preserving normal **unicast DNS**.
+No multicast hostname discovery is enabled by the server defaults.
+
+On a server built from the updated source, inspect the *effective* firewall
+and resolver behavior with:
+
+```sh
+sudo systemctl is-enabled nftables
+sudo nft list table inet omarchy_server_filter
+resolvectl llmnr
+resolvectl mdns
+sudo ss -lun | grep -E ':(5353|5355)\b' || true
+```
+
+The stock `nftables.service` is a oneshot service: depending on systemd's
+service state it may report inactive **after successfully loading rules**.
+The authoritative check is the **loaded kernel ruleset**, not `is-active`.
+If you later expose a web server or another service, explicitly add only the
+necessary port, validate with `sudo nft -c -f /etc/nftables.conf`, and reload
+from a console or an independent management connection to avoid losing SSH.
+Do not replace a running host firewall using the ISO's rules during testing.
+
+Local tests, without rebuilding the ISO or touching the OmarchyVM firewall:
+`python3 test/server/unit.py` and `test/server/firewall_namespace.sh`. The
+latter creates disposable namespaces, checks IPv4+IPv6 SSH/ping/DHCP and
+rejects incoming TCP 8080 on both families. No Proxmox test is implied.
 
 ### Multiple NICs and persistent policy
 
