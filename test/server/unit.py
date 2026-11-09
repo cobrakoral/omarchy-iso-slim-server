@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import importlib.util
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -340,7 +341,17 @@ class NetworkSecurityPolicyTests(unittest.TestCase):
                     shutil.copy2(self.policy, bundle_path / "server-nftables.conf")
                     shutil.copy2(self.resolver, bundle_path / "server-resolved.conf")
                     with patch.object(server, "SECURITY_CONFIG_DIR", bundle_path):
-                        server.configure_network_security(ctx)
+                        # Reproduce the installer's restrictive umask. Before
+                        # this fix, mkdir inherited 0700 and resolved could
+                        # not traverse the directory at boot.
+                        prior_umask = os.umask(0o077)
+                        try:
+                            server.configure_network_security(ctx)
+                        finally:
+                            os.umask(prior_umask)
+            dropins = target / "etc/systemd/resolved.conf.d"
+            self.assertEqual(dropins.stat().st_mode & 0o777, 0o755)
+            self.assertEqual((dropins / "90-omarchy-server-no-multicast.conf").stat().st_mode & 0o777, 0o644)
             self.assertEqual((target / "etc/nftables.conf").read_bytes(), self.policy.read_bytes())
             self.assertEqual(
                 (target / "etc/systemd/resolved.conf.d/90-omarchy-server-no-multicast.conf").read_bytes(),

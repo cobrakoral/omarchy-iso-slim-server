@@ -182,6 +182,13 @@ SECURITY_CONFIG_DIR = Path("/usr/share/omarchy-iso")
 
 
 def configure_network_security(ctx):
+    # The live installer uses umask 077, but systemd-resolved runs as the
+    # unprivileged systemd-resolve user. A 0700 drop-in directory causes it to
+    # silently ignore LLMNR=no / MulticastDNS=no and bind ports 5353/5355.
+    # Explicitly make this public configuration directory traversable.
+    resolved_dropins = ctx.target / "etc/systemd/resolved.conf.d"
+    resolved_dropins.mkdir(mode=0o755, parents=True, exist_ok=True)
+    resolved_dropins.chmod(0o755)
     write(
         ctx,
         "etc/systemd/resolved.conf.d/90-omarchy-server-no-multicast.conf",
@@ -341,6 +348,11 @@ def validate_target(ctx):
     ):
         chroot(ctx, "systemctl", "is-enabled", unit)
     chroot(ctx, "nft", "-c", "-f", "/etc/nftables.conf")
+    resolved_dropins = ctx.target / "etc/systemd/resolved.conf.d"
+    if (resolved_dropins.stat().st_mode & 0o777) != 0o755:
+        raise ValueError("systemd-resolved drop-ins must be traversable by its service user")
+    if ((resolved_dropins / "90-omarchy-server-no-multicast.conf").stat().st_mode & 0o777) != 0o644:
+        raise ValueError("systemd-resolved drop-in must be readable by its service user")
     if (ctx.target / "etc/NetworkManager").exists():
         raise ValueError("NetworkManager must not be configured")
 
