@@ -288,6 +288,28 @@ def validate_receipt(receipt, iso_hash, packages):
         raise ValueError("Receipt does not match its recorded committed harness")
 
 
+def verify_extended_receipt(receipt, *, kind, iso_hash, source, base):
+    """Bind the selected regression evidence to this ISO, source and base VM."""
+    if kind == "network-virtio":
+        valid_case = receipt.get("model") == "virtio"
+    elif kind == "failure-pre-hook":
+        valid_case = (
+            receipt.get("case") == "pre-hook"
+            and receipt.get("bios") is False
+            and receipt.get("encrypted") is False
+        )
+    else:
+        raise ValueError("Extended acceptance has an unknown case")
+    if (
+        not valid_case
+        or receipt.get("passed") is not True
+        or receipt.get("iso_sha256") != iso_hash
+        or receipt.get("source_revision") != source
+        or receipt.get("base") != str(base)
+    ):
+        raise ValueError("Extended acceptance receipt does not match its qualified ISO and source")
+
+
 def produced(command, log, marker, env=None):
     before = set((ROOT / "test-runs/server").glob("*"))
     run(command, log, env)
@@ -706,6 +728,36 @@ def _main_locked(args, output, cache, work, work_lock):
         if name == "interactive":
             compact(directory, bases["base"] / "system.qcow2")
         additional[name] = {"directory": str(directory), "receipt": receipt}
+    # Keep the mandatory extension small: one dual-stack NIC and one
+    # pre-transaction failure followed by recovery on disposable overlays.
+    reserve()
+    network = produced(
+        ["python3", ROOT / "test/server/networking.py", bases["base"],
+         "--model", "virtio", "--port", str(args.port)],
+        work / "network-virtio.log", "network-pass.json", env,
+    )
+    network_receipt = json.loads((network / "network-pass.json").read_text())
+    verify_extended_receipt(network_receipt, kind="network-virtio", iso_hash=iso_hash,
+                            source=source, base=bases["base"])
+    additional["network-virtio"] = {"directory": str(network), "receipt": network_receipt}
+
+    reserve()
+    fault_staging = work / "failure-fixtures"
+    run(
+        ["python3", ROOT / "test/server/prepare_failures.py",
+         "--repository", repo, "--mirror", cache / "mirror",
+         "--directory", fault_staging],
+        work / "failure-fixtures.log", env,
+    )
+    failure = produced(
+        ["python3", ROOT / "test/server/failures.py", bases["base"],
+         fault_staging / "packages", "--case", "pre-hook", "--port", str(args.port)],
+        work / "failure-pre-hook.log", "failure-pass.json", env,
+    )
+    failure_receipt = json.loads((failure / "failure-pass.json").read_text())
+    verify_extended_receipt(failure_receipt, kind="failure-pre-hook", iso_hash=iso_hash,
+                            source=source, base=bases["base"])
+    additional["failure-pre-hook"] = {"directory": str(failure), "receipt": failure_receipt}
     trust = {}
     for name in ("base", "cloud"):
         reserve()

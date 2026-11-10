@@ -121,8 +121,13 @@ Acceptance receipts bind the ISO SHA-256, source revision, source cleanliness
 and harness hash, plus the stopped test disk's SHA-256 before compaction.
 The qualifier then tests installed channel trust without
 manual key import and boots/restores an actual snapshot, followed by normal
-root boot and another installed-trust check. Any failed command prevents the
-final `server-release-acceptance.json` success record.
+root boot and another installed-trust check. A single VirtIO networking regression
+also exercises IPv4/IPv6 addressing, DHCP renewal, DNS fixtures and link loss.
+One pre-transaction Pacman-hook fault must fail safely, recover on retry, and
+boot again. Both use disposable QEMU overlays; the full multi-NIC and fault
+matrices remain separate, opt-in tests. Any failed command prevents the final
+`server-release-acceptance.json` success record. These new checks qualify only
+future builds: the already published `test4` release was not rebuilt.
 
 To limit space, it removes only that completed generation's generated
 `cache/profile` after build verification. Downloaded archives and provenance
@@ -548,8 +553,10 @@ python3 test/server/networking.py test-runs/server/<accepted-default-UEFI-run> \
   --model all --external
 ```
 
-This opt-in suite permits guest egress for real DNS and HTTPS, creates new
-copy-on-write disks, and leaves the accepted backing disk unchanged. It tests
+The release qualifier requires the VirtIO case without `--external`; the
+full matrix below remains opt-in. The `--external` option enables public DNS
+and HTTPS checks. Both create new copy-on-write disks and leave the accepted
+backing disk unchanged. The full matrix tests
 virtio, e1000 and RTL8139 data NIC models alongside a management NIC. A third
 isolated Ethernet socket peer records DHCP REQUEST/ACK renewal exchanges;
 it binds only to host loopback and never serves the host LAN. The original

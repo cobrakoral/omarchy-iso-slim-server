@@ -190,6 +190,9 @@ def main():
         raise ValueError("Use a stopped, accepted disposable guest")
     if not packages.is_relative_to(ROOT / ".server-work"):
         raise ValueError("Use the isolated package staging directory")
+    baseline = json.loads((base / "acceptance-pass.json").read_text())
+    if not isinstance(baseline.get("iso_sha256"), str):
+        raise ValueError("Accepted baseline must identify the ISO")
     manifest = json.loads((packages / "maintenance.json").read_text())
     if (
         hashlib.sha256((packages / manifest["package"]).read_bytes()).hexdigest()
@@ -467,6 +470,8 @@ test ! -e /var/lib/omarchy-server/update-state
             vm.stop()
         receipt = {
             "case": case,
+            "base": str(base),
+            "iso_sha256": baseline["iso_sha256"],
             "bios": opts.bios,
             "encrypted": opts.encrypt,
             "package": manifest,

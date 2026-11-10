@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Opt-in live-network acceptance of an existing, stopped server ISO installation.
+"""VirtIO network regression or opt-in full NIC matrix for an accepted server.
 
-Creates COW disks, uses only QEMU user networking and host-loopback fixtures.
-Unlike the offline suites, this explicitly permits guest egress for real DNS/TLS.
+Creates COW disks with QEMU networking and host-loopback fixtures. Public
+DNS/TLS checks are run only when explicitly requested with --external.
 """
 
 import argparse
@@ -138,7 +138,7 @@ def main():
             str(disk_source),
             str(disk),
         )
-        media = ROOT / ".server-work/round4" / (directory.name + "-media")
+        media = directory / "media"
         media.mkdir(parents=True, mode=0o700)
         shutil.copy2(ROOT / "test/server/network_guest.py", media)
         shutil.copy2(ROOT / "builder/server/config.py", media / "config.py")

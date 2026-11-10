@@ -875,6 +875,49 @@ class CompactionJournalTests(unittest.TestCase):
 
 
 
+class ExtendedAcceptanceReceiptTests(unittest.TestCase):
+    """Network/failure evidence must identify the ISO and exact baseline."""
+
+    def setUp(self):
+        import release
+        self.release = release
+        self.base = Path("/tmp/disposable-accepted-UEFI")
+        self.good = {
+            "passed": True, "source_revision": "f" * 40,
+            "iso_sha256": "a" * 64, "base": str(self.base),
+        }
+
+    def verify(self, kind, **updates):
+        record = self.good | updates
+        return self.release.verify_extended_receipt(
+            record, kind=kind, iso_hash="a" * 64,
+            source="f" * 40, base=self.base,
+        )
+
+    def test_valid_network_and_failure_receipts(self):
+        self.verify("network-virtio", model="virtio")
+        self.verify("failure-pre-hook", case="pre-hook", bios=False, encrypted=False)
+
+    def test_missing_or_mismatched_evidence_rejected(self):
+        good_network = {"model": "virtio"}
+        for field, value in (
+            ("passed", False), ("source_revision", "x" * 40),
+            ("iso_sha256", "b" * 64), ("base", "/tmp/other"),
+            ("model", "e1000"),
+        ):
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "Extended acceptance"):
+                self.verify("network-virtio", **(good_network | {field: value}))
+        for changes in (
+            {"case": "post-hook"}, {"bios": True}, {"encrypted": True},
+        ):
+            with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, "Extended acceptance"):
+                self.verify("failure-pre-hook", **({"case": "pre-hook", "bios": False, "encrypted": False} | changes))
+
+    def test_unknown_extended_case_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Extended acceptance"):
+            self.verify("unspecified")
+
+
 class OptimizedReleaseSafetyTests(unittest.TestCase):
     """Release integrity checks must execute even with Python -O or -OO."""
 

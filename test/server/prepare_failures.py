@@ -18,6 +18,7 @@ def main():
         "--directory", type=Path, default=ROOT / ".server-work/failure-tests"
     )
     parser.add_argument("--repository", type=Path, required=True)
+    parser.add_argument("--mirror", type=Path, default=ROOT / ".server-work/cache/mirror")
     opts = parser.parse_args()
     out = opts.directory.resolve()
     if not out.is_relative_to(ROOT / ".server-work"):
@@ -50,7 +51,7 @@ package() {{
         target = share / ("old" if version == 1 else "stable")
         for source in (archive, archive.with_name(archive.name + ".sig")):
             shutil.copy2(source, target / source.name)
-    mirror = ROOT / ".server-work/cache/mirror"
+    mirror = opts.mirror.resolve()
     if not list(mirror.glob("linux-omarchy-*.pkg.tar.zst")):
         raise ValueError("Keep the baseline build's offline package mirror")
     for archive in mirror.glob("*.pkg.tar.zst"):
