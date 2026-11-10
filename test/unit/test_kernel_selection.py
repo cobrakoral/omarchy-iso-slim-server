@@ -98,6 +98,8 @@ class KernelSelectionTest(unittest.TestCase):
         for kernels in (["linux-omarchy"], ["linux-t2"], ["linux-omarchy", "linux-lts"]):
             for fail_headers in (False, True):
                 with self.subTest(kernels=kernels, fail_headers=fail_headers), ExitStack() as stack:
+                    # Exercise desktop behavior even when tests run on a server ISO.
+                    stack.enter_context(mock.patch.object(phases_impl, "_server_edition", return_value=False))
                     events = []
                     installer = mock.MagicMock()
 
