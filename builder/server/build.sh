@@ -24,11 +24,11 @@ cp -a /configs/. "$work/"
 # Replace the inherited releng live package set, not just the target set.
 cp /builder/server/live.packages "$work/packages.x86_64"
 cp /builder/linux-omarchy.preset "$work/airootfs/etc/mkinitcpio.d/linux-omarchy.preset"
-rm -f "$work/airootfs/etc/mkinitcpio.d/linux.preset"
+rm -f "$work/airootfs/etc/mkinitcpio.d/linux.preset" "$work/airootfs/etc/mkinitcpio.d/linux-t2.preset"
 # No graphical splash, network daemon competition or live cloud-init.
 cat > "$work/airootfs/etc/mkinitcpio.conf.d/archiso.conf" <<'CONF'
 MODULES=(loop)
-HOOKS=(base udev microcode modconf memdisk archiso archiso_loop_mnt archiso_pxe_common archiso_pxe_nbd archiso_pxe_http archiso_pxe_nfs block filesystems keyboard)
+HOOKS=(base udev microcode modconf memdisk archiso archiso_loop_mnt archiso_pxe_common archiso_pxe_http archiso_pxe_nfs block filesystems keyboard)
 CONF
 find "$work/airootfs/etc/systemd/system" -type l \( -name '*cloud*' -o -name '*NetworkManager*' -o -name '*reflector*' -o -name '*iwd*' -o -name '*dhcpcd*' -o -name '*sshd*' \) -delete
 rm -rf "$work/airootfs/etc/systemd/system/reflector.service.d"
@@ -167,5 +167,12 @@ for unit in omarchy-root-image-verify omarchy-mirror-verify; do
   mkdir -p "$work/airootfs/etc/systemd/system/$unit.service.d"
   printf '[Service]\nTimeoutStartSec=1800\n' > "$work/airootfs/etc/systemd/system/$unit.service.d/50-timeout.conf"
 done
-mkarchiso -v -w "$work/work" -o /out "$work"
+# mkarchiso may finish with exit 0 after failed mkinitcpio/pacman hooks.
+# Treat those errors as build failures, not as a bootable release artifact.
+mkarchiso_log=/server-cache/mkarchiso.log
+mkarchiso -v -w "$work/work" -o /out "$work" 2>&1 | tee "$mkarchiso_log"
+if grep -Eq '^==> ERROR:|^==> WARNING: errors were encountered|^error: command failed to execute correctly' "$mkarchiso_log"; then
+  echo 'ISO build failed: mkarchiso reported initramfs or package-hook errors.' >&2
+  exit 1
+fi
 (cd /out && sha256sum omarchy-slim-server-unofficial-*.iso > SHA256SUMS)
