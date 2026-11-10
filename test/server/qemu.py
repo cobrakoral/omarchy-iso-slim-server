@@ -555,8 +555,18 @@ nft list table inet omarchy_server_filter | grep -F 'udp sport 547 udp dport 546
 nft list table inet omarchy_server_filter | grep -F 'icmpv6 type'
 grep -Fx 'LLMNR=no' /etc/systemd/resolved.conf.d/90-omarchy-server-no-multicast.conf
 grep -Fx 'MulticastDNS=no' /etc/systemd/resolved.conf.d/90-omarchy-server-no-multicast.conf
-grep -Fx 'LLMNR=no' /etc/systemd/network/20-omarchy-server.network
-grep -Fx 'MulticastDNS=no' /etc/systemd/network/20-omarchy-server.network
+# Every installed physical/VM NIC has its own deterministic networkd profile.
+test ! -e /etc/systemd/network/20-omarchy-server.network
+for profile in /etc/systemd/network/10-*.network; do
+  test -f "$profile"
+  nic=${profile##*/}; nic=${nic#10-}; nic=${nic%.network}
+  test -d "/sys/class/net/$nic/device"
+  grep -Fx "Name=$nic" "$profile"
+  grep -Fx 'LLMNR=no' "$profile"
+  grep -Fx 'MulticastDNS=no' "$profile"
+  grep -Fx 'IPv6AcceptRA=yes' "$profile"
+  grep -Fx 'UseHostname=no' "$profile"
+done
 resolvectl llmnr | grep -Fx 'Global: no'
 resolvectl mdns | grep -Fx 'Global: no'
 ! ss -H -lun | awk '{print $5}' | grep -Eq ':(5353|5355)$'

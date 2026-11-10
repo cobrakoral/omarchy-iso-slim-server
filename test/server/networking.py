@@ -255,6 +255,7 @@ def main():
                 vm.stop()
                 vm = boot()
                 phase("preferred")
+                phase("ipv4-only")
                 phase("static")
                 vm.stop()
                 vm = boot()

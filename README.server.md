@@ -435,13 +435,113 @@ Existing signed ISOs retain their original contents; source fixes require a new 
 
 ## Networking
 
-The installed server enables **systemd-networkd** and **systemd-resolved**.
-`/etc/resolv.conf` points at `/run/systemd/resolve/stub-resolv.conf`. The
-installer writes `/etc/systemd/network/20-omarchy-server.network`. DHCP is
-the default, including IPv6 DHCP and router advertisements. Static IPv4
-selects an interface by its persistent MAC address and requires an
-address/prefix, an on-link gateway and DNS addresses; IPv6
-router advertisements remain enabled. No second DHCP daemon is enabled.
+**Source-only change:** the currently published `test4` ISO still has the
+previous catch-all network configuration and does not include this menu. These
+per-interface settings will be present only in a future build.
+
+The installed server uses **systemd-networkd** and **systemd-resolved**, with
+`/etc/resolv.conf` linked to `/run/systemd/resolve/stub-resolv.conf`.
+During installation, each detected physical or VM Ethernet interface receives
+its own `/etc/systemd/network/10-<interface>.network`. The installer detects
+these from the live kernel's Ethernet devices; Wi-Fi, bridges, tunnels and
+virtual veth interfaces are excluded. There is **no catch-all** `.network` file.
+Newly hot-plugged interfaces will need an administrator-created profile.
+The **live installation medium** retains ArchISO's bootstrap Ethernet match,
+but stages DHCPv4, IPv6 RA/SLAAC and `UseHostname=no` for both DHCP clients,
+without enabling multicast DNS. It is never copied as a catch-all profile into
+the installed server. Neither profile setup alters the running build host.
+
+The default is automatic dual-stack, without additional questions beyond the
+existing networking choice: DHCPv4 obtains the IPv4 address, gateway and DNS;
+IPv6 Router Advertisements provide SLAAC addresses and routes, and networkd
+uses RA-provided RDNSS and DHCPv6 where the router requests it. IPv4 and IPv6
+are independent. Neither a DNS64/NAT64 translator nor public DNS defaults are
+installed. Both DHCP clients have `UseHostname=no` so a DHCP server cannot
+change the installed hostname. Per-link LLMNR and mDNS remain disabled.
+
+The optional **Configure interfaces** choice opens a Gum terminal menu. Select
+an Ethernet interface and configure IPv4 independently as DHCP, static or
+disabled; configure IPv6 independently as RA/SLAAC, static or disabled. Static
+settings take an address with prefix, optional on-link gateway, and optional
+per-family DNS server addresses. The menu can display the proposed `.network`
+file, restore an interface to automatic defaults, or **Apply and return** to
+the installer. Nothing is applied to the *live installer network*. The selected
+configuration is validated and written to the installed target, becoming
+active on its first boot. Just press Enter on **Automatic dual-stack (default)**
+to skip all manual questions.
+
+A default profile looks like:
+
+```ini
+# /etc/systemd/network/10-enp1s0.network (example interface name)
+[Match]
+Name=enp1s0
+
+[Network]
+DHCP=ipv4
+IPv6AcceptRA=yes
+LinkLocalAddressing=ipv6
+LLMNR=no
+MulticastDNS=no
+
+[DHCPv4]
+UseHostname=no
+
+[DHCPv6]
+UseHostname=no
+```
+
+A server configured manually with static addresses for both families might have:
+
+```ini
+# /etc/systemd/network/10-enp2s0.network (example interface name)
+[Match]
+Name=enp2s0
+
+[Network]
+DHCP=no
+IPv6AcceptRA=no
+LinkLocalAddressing=ipv6
+LLMNR=no
+MulticastDNS=no
+Address=192.0.2.20/24
+Gateway=192.0.2.1
+DNS=192.0.2.53
+Address=2001:db8:20::20/64
+Gateway=fe80::1
+DNS=2001:db8:20::53
+
+[DHCPv4]
+UseHostname=no
+
+[DHCPv6]
+UseHostname=no
+```
+
+Unattended installs remain noninteractive. With no extra network fields, every
+detected Ethernet link gets the default profile. To override individual links,
+add `omarchy_install.server.network_interfaces` to the unattended configuration,
+with names as keys and per-family settings as values:
+
+```json
+{
+  "enp1s0": {"ipv4": "disabled", "ipv6": "auto"},
+  "enp2s0": {
+    "ipv4": "static", "address4": "192.0.2.20/24",
+    "gateway4": "192.0.2.1", "dns4": "192.0.2.53",
+    "ipv6": "static", "address6": "2001:db8:20::20/64",
+    "gateway6": "fe80::1", "dns6": "2001:db8:20::53"
+  }
+}
+```
+
+The JSON above is the value of the `network_interfaces` field, not a complete
+unattended configuration. Interface names must match the NICs detected before
+disk formatting. The former single-interface `network=static` + `mac` + IPv4
+address/gateway/DNS unattended fields are still accepted for compatibility.
+New deployments should use `network_interfaces`. IPv4 static gateways must be
+in the connected subnet; IPv6 static gateways may also be link-local. The
+absence of a gateway or DNS server is permitted for isolated static networks.
 
 ### Default server firewall and multicast-name resolution
 
@@ -493,58 +593,21 @@ rejects incoming TCP 8080 on both families. No Proxmox test is implied.
 
 ### Multiple NICs and persistent policy
 
-The generated DHCP profile manages each matching hardware link. It does not
-infer which uplink should win when several links advertise a default route.
-Use MAC-matched files with names sorting before `20-omarchy-server.network`
-for an explicit site policy. For example, a backup/management link can use:
+Each detected NIC has its own explicit, editable file. If two links provide
+usable default gateways, networkd's route selection applies. The installer
+does **not** guess which uplink should be preferred or force all DNS queries
+through a particular interface. For an intentional failover design, an
+administrator can add per-interface `[DHCPv4] RouteMetric=`,
+`[IPv6AcceptRA] RouteMetric=` and optional `[Network] DNSDefaultRoute=` or
+`Domains=~.` options after installation. Validate those changes from a local
+console or independent management link, then run `networkctl reload` and
+`networkctl reconfigure <interface>`; the generated files persist across
+reboot. Such preference policies are site-specific, not installation defaults.
 
-```ini
-# /etc/systemd/network/10-management.network
-[Match]
-MACAddress=aa:bb:cc:dd:ee:01
-[Network]
-DHCP=ipv4
-IPv6AcceptRA=no
-DNSDefaultRoute=yes
-[DHCPv4]
-RouteMetric=2000
-UseDNS=yes
-```
-
-The preferred uplink can use:
-
-```ini
-# /etc/systemd/network/11-uplink.network
-[Match]
-MACAddress=aa:bb:cc:dd:ee:02
-[Network]
-DHCP=yes
-IPv6AcceptRA=yes
-DNSDefaultRoute=yes
-Domains=~.
-[DHCPv4]
-RouteMetric=100
-UseDNS=yes
-[IPv6AcceptRA]
-RouteMetric=100
-```
-
-The lower route metric selects the uplink. Its `~.` DNS routing domain sends
-ordinary queries to that link while it is available; the management link's
-DHCP DNS becomes available when the uplink loses carrier. This policy is
-explicit configuration, not an installer guess. It was tested through cable
-loss, recovery, DHCP renewal and cold boot. Networkd removes the failed link's
-routes and DNS configuration; this does not detect an upstream outage that
-leaves Ethernet carrier up.
-
-Apply network changes from the console or an independent management link,
-then use `networkctl reload` and `networkctl reconfigure <interface>`.
-Inspect `ip route`, `ip -6 route` and `resolvectl status`. Static IPv4 remains
-MAC-matched and persists across reboot. The text installer currently offers
-DHCP or static IPv4; IPv6-only static deployments need an administrator-owned
-networkd profile (`DHCP=no`, IPv6 `Address=`, `Gateway=` and `DNS=`). The
-IPv6-only acceptance uses such a persistent profile with all non-loopback
-IPv4 addresses removed. Public IPv6 routing still requires a suitable uplink.
+Inspect installed settings using `networkctl status`, `ip route`,
+`ip -6 route` and `resolvectl status`. The IPv6-only acceptance uses a
+persistent static IPv6 test profile with no non-loopback IPv4 address. Public
+IPv6 Internet connectivity still requires a suitable upstream network.
 
 ### Network acceptance matrix
 

@@ -108,8 +108,14 @@ def baseline(args):
         )
 
     links = eventually(ready)
-    if not (all(i["NetworkFile"].endswith("20-omarchy-server.network") for i in links)):
-        raise AssertionError
+    for link in links:
+        expected = f"10-{link['Name']}.network"
+        if not link["NetworkFile"].endswith(expected):
+            raise AssertionError(f"Expected {expected}, got {link['NetworkFile']}")
+        content = Path(link["NetworkFile"]).read_text()
+        for setting in ("DHCP=ipv4", "IPv6AcceptRA=yes", "UseHostname=no"):
+            if setting not in content:
+                raise AssertionError(f"Missing {setting} from {expected}")
     config = command("sshd", "-T").lower()
     if not ("passwordauthentication no" in config):
         raise AssertionError
@@ -141,6 +147,8 @@ def baseline(args):
         "baseline",
         {
             "links": links,
+            "dns_a": command("resolvectl", "query", "--protocol=dns", "--type=A", "github.com"),
+            "dns_aaaa": command("resolvectl", "query", "--protocol=dns", "--type=AAAA", "one.one.one.one"),
             "listeners": listeners,
             "services": command(
                 "systemctl", "is-active", "sshd", "systemd-networkd", "systemd-resolved"
@@ -150,8 +158,9 @@ def baseline(args):
 
 
 def configure(args):
+    # Override the installed 10-<interface> files on disposable guest disks.
     write(
-        "10-network-acceptance-management.network",
+        "09-network-acceptance-management.network",
         f"""[Match]
 MACAddress={MANAGEMENT_MAC}
 [Network]
@@ -162,10 +171,11 @@ DNSDefaultRoute=yes
 [DHCPv4]
 RouteMetric=2000
 UseDNS=yes
+UseHostname=no
 """,
     )
     write(
-        "11-network-acceptance-data.network",
+        "09-network-acceptance-data.network",
         f"""[Match]
 MACAddress={DATA_MAC}
 [Network]
@@ -176,12 +186,15 @@ Domains=~.
 [DHCPv4]
 RouteMetric=100
 UseDNS=yes
+UseHostname=no
+[DHCPv6]
+UseHostname=no
 [IPv6AcceptRA]
 RouteMetric=100
 """,
     )
     write(
-        "12-network-acceptance-renewal.network",
+        "09-network-acceptance-renewal.network",
         """[Match]
 MACAddress=52:54:00:12:34:58
 [Network]
@@ -192,6 +205,7 @@ DNSDefaultRoute=no
 [DHCPv4]
 RouteMetric=3000
 UseDNS=no
+UseHostname=no
 """,
     )
     reload()
@@ -347,20 +361,46 @@ def external(args):
     )
 
 
+def ipv4_only(args):
+    """Verify DNS A/AAAA over IPv4 with IPv6 disabled on the data link."""
+    import config
+
+    name = interface(DATA_MAC)["Name"]
+    profile = config.network_config(name, {"ipv6": "disabled"})
+    digest = write("09-network-acceptance-data.network", profile)
+    reload()
+
+    def ready():
+        link = interface(DATA_MAC)
+        if not link.get("DHCPv4Client", {}).get("Lease"):
+            return None
+        v6 = json.loads(command("ip", "-j", "-6", "addr", "show", "dev", name))
+        if any(item.get("addr_info") for item in v6):
+            return None
+        return link
+
+    eventually(ready)
+    command("resolvectl", "domain", name, "~.")
+    a = eventually(lambda: dns(name))
+    aaaa = command("resolvectl", "query", "--protocol=dns", "--type=AAAA", "one.one.one.one")
+    record("ipv4-only", {
+        "configuration_sha256": digest,
+        "dns_a_over_ipv4": a,
+        "dns_aaaa_over_ipv4": aaaa,
+        "routes": command("ip", "-4", "route"),
+        "ipv6_disabled_on": name,
+    })
+
+
 def static(args):
     # This is the actual installer generator from the source tree under test.
     import config
 
-    content = config.network_config(
-        dict(
-            network="static",
-            mac=DATA_MAC,
-            address="10.0.3.40/24",
-            gateway="10.0.3.2",
-            dns="10.0.3.3",
-        )
-    )
-    digest = write("11-network-acceptance-data.network", content)
+    content = config.network_config(interface(DATA_MAC)["Name"], {
+        "ipv4": "static", "address4": "10.0.3.40/24",
+        "gateway4": "10.0.3.2", "dns4": "10.0.3.3",
+    })
+    digest = write("09-network-acceptance-data.network", content)
     reload()
     eventually(
         lambda: any(
@@ -384,17 +424,12 @@ def static(args):
 def static_check(args):
     import config
 
-    expected = config.network_config(
-        dict(
-            network="static",
-            mac=DATA_MAC,
-            address="10.0.3.40/24",
-            gateway="10.0.3.2",
-            dns="10.0.3.3",
-        )
-    )
+    expected = config.network_config(interface(DATA_MAC)["Name"], {
+        "ipv4": "static", "address4": "10.0.3.40/24",
+        "gateway4": "10.0.3.2", "dns4": "10.0.3.3",
+    })
     if not (
-        Path("/etc/systemd/network/11-network-acceptance-data.network").read_text()
+        Path("/etc/systemd/network/09-network-acceptance-data.network").read_text()
         == expected
     ):
         raise AssertionError
@@ -428,21 +463,24 @@ def static_check(args):
 
 def ipv6_configure(args):
     content = f"""[Match]
-MACAddress={DATA_MAC}
+Name={interface(DATA_MAC)['Name']}
 [Network]
 DHCP=no
 IPv6AcceptRA=no
+LinkLocalAddressing=ipv6
 Address=fd00:3::15/64
 Gateway=fd00:3::2
 DNS=[fd00:3::2]:{args.port}
 Domains=~.
 DNSDefaultRoute=yes
+[DHCPv4]
+UseHostname=no
 """
     record(
         "ipv6-configure",
         {
             "configuration_sha256": write(
-                "11-network-acceptance-data.network", content
+                "09-network-acceptance-data.network", content
             ),
             "configuration": content,
         },
@@ -471,7 +509,7 @@ def ipv6_only(args):
         data = interface(DATA_MAC)["Name"]
         prior = json.loads((RESULTS / "ipv6-configure.json").read_text())
         digest = hashlib.sha256(
-            Path("/etc/systemd/network/11-network-acceptance-data.network").read_bytes()
+            Path("/etc/systemd/network/09-network-acceptance-data.network").read_bytes()
         ).hexdigest()
         if not (digest == prior["configuration_sha256"]):
             raise AssertionError
@@ -522,6 +560,7 @@ def main():
             "lost",
             "recovered",
             "external",
+            "ipv4-only",
             "static",
             "static-check",
             "ipv6-configure",
