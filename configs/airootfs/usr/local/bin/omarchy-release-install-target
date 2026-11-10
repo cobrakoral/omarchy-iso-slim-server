@@ -79,6 +79,30 @@ if mountpoint -q "$target"; then
     } >&2
     exit 1
   fi
+else
+  # Target parent is not a mountpoint, but nested mounts may exist beneath it.
+  # findmnt -R "$target" returns nothing when parent isn't mounted, so list
+  # all target mountpoints and filter by exact "$target/" prefix.
+  nested_mounts=()
+  if ! all_mounts=$(findmnt -rn -o TARGET); then
+    echo "could not list mounts to check for nested targets under $target" >&2
+    exit 1
+  fi
+  while IFS= read -r mnt; do
+    [[ -n $mnt && $mnt == "$target"/* ]] && nested_mounts+=("$mnt")
+  done <<< "$all_mounts"
+
+  if (( ${#nested_mounts[@]} > 0 )); then
+    while IFS= read -r mnt; do
+      if [[ -n $mnt ]] && ! umount "$mnt"; then
+        {
+          echo "could not unmount nested mount $mnt; holders:"
+          fuser -vm "$mnt" 2>&1
+        } >&2
+        exit 1
+      fi
+    done < <(printf '%s\n' "${nested_mounts[@]}" | LC_ALL=C sort -r)
+  fi
 fi
 
 # A mapper can be mounted outside the target tree too: the orchestrator

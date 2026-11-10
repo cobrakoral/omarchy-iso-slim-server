@@ -66,6 +66,7 @@ new_box() { # -> sets BOX to a fresh sandbox with default (nothing to do) state
   : >"$BOX/calls"
   : >"$BOX/swaps"        # /proc/swaps body, header already stripped
   : >"$BOX/sources"      # findmnt -o SOURCE -R <target>
+  : >"$BOX/all_mounts"   # findmnt -rn -o TARGET (unscoped)
   : >"$BOX/mapper_mounts" # findmnt -o TARGET -S /dev/mapper/<name>
   : >"$BOX/uuids"        # "<mapper> <dm uuid>" per line; absent = no such mapper
   echo 1 >"$BOX/mounted_rc"
@@ -89,8 +90,13 @@ EOF
   cat >"$BOX/bin/findmnt" <<'EOF'
 #!/bin/bash
 echo "findmnt $*" >>"$BOX/calls"
+if [[ -e $BOX/findmnt_broken ]]; then
+  echo "findmnt: error" >&2
+  exit 1
+fi
 case "$*" in
   *"-o SOURCE"*) cat "$BOX/sources" ;;
+  "-rn -o TARGET") cat "$BOX/all_mounts" ;;
   *"-o TARGET"*) cat "$BOX/mapper_mounts" ;;
   *)             echo "stub findmnt tree" ;;   # the failure diagnosis
 esac
@@ -264,6 +270,34 @@ run_release omarchy_root
 check "a stage mount outside the target is unmounted" 0 "$RC" \
   "umount -R /run/omarchy-install/image-top" "$CALLS"
 call_order "the stage mount goes before the close" '^umount -R /run' '^cryptsetup close'
+
+# ── Nested mounts when parent target is not a mountpoint ────────────────────
+new_box
+printf '/\n%s/boot\n%s/boot/efi\n/other\n' "$TARGET" "$TARGET" >"$BOX/all_mounts"
+run_release
+check "nested mounts under unmounted target are unmounted" 0 "$RC"
+check "deepest nested mount unmounted first" 0 0 "umount $TARGET/boot/efi" "$CALLS"
+check "shallower nested mount unmounted" 0 0 "umount $TARGET/boot" "$CALLS"
+check_absent "unrelated mount outside target is untouched" "/other" "$CALLS"
+if grep -Fxq "umount $TARGET" <<<"$CALLS" || grep -Fxq "umount -R $TARGET" <<<"$CALLS"; then
+  echo "FAIL: unmounted parent was sent to umount"; fails=1
+else
+  echo "ok: unmounted parent is not sent to umount"
+fi
+call_order "deepest-first unmount order" "umount $TARGET/boot/efi" "umount $TARGET/boot$"
+
+new_box
+printf '%s/boot\n' "$TARGET" >"$BOX/all_mounts"
+echo 1 >"$BOX/umount_rc"
+run_release
+check "failed nested child unmount causes nonzero exit" 1 "$RC" \
+  "could not unmount nested mount $TARGET/boot" "$OUT"
+
+new_box
+touch "$BOX/findmnt_broken"
+run_release
+check "failed mount-table probe refuses to release" 1 "$RC" \
+  "could not list mounts" "$OUT"
 
 if (( fails )); then
   echo "omarchy-release-install-target: FAILED"
