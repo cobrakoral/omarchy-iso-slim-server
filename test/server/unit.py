@@ -124,46 +124,41 @@ class ServerTests(unittest.TestCase):
         text = "# Configuration\n#en_US.UTF-8 UTF-8  \npt_BR.UTF-8 UTF-8\t\n#en_US ISO-8859-1  \n"
         self.assertEqual(config.supported_locales(text), ["en_US.UTF-8", "pt_BR.UTF-8"])
 
-    def test_dhcp_and_ipv6_without_interface_name(self):
-        text = config.network_config({})
-        self.assertIn("DHCP=yes", text)
+    def test_default_dual_stack_with_explicit_interface_name(self):
+        text = config.network_config("ens18")
+        self.assertIn("Name=ens18", text)
+        self.assertIn("DHCP=ipv4", text)
         self.assertIn("IPv6AcceptRA=yes", text)
+        self.assertIn("LinkLocalAddressing=ipv6", text)
+        self.assertIn("UseHostname=no", text)
         self.assertIn("LLMNR=no", text)
         self.assertIn("MulticastDNS=no", text)
-        self.assertNotIn("Name=", text)
+        self.assertNotIn("Path=*", text)
+        self.assertNotIn("1.1.1.1", text)
 
     def test_static_ipv4_and_ipv6_dns(self):
-        text = config.network_config(
-            dict(
-                network="static",
-                mac="52:54:00:12:34:56",
-                address="192.0.2.4/24",
-                gateway="192.0.2.1",
-                dns="192.0.2.53 2001:db8::53",
-            )
-        )
-        self.assertIn("DHCP=ipv6", text)
+        text = config.network_config("enp1s0", {
+            "ipv4": "static", "address4": "192.0.2.4/24",
+            "gateway4": "192.0.2.1", "dns4": "192.0.2.53",
+            "ipv6": "auto", "dns6": "2001:db8::53",
+        })
+        self.assertIn("DHCP=no", text)
+        self.assertIn("IPv6AcceptRA=yes", text)
+        self.assertIn("Address=192.0.2.4/24", text)
+        self.assertIn("Gateway=192.0.2.1", text)
         self.assertIn("DNS=2001:db8::53", text)
-        self.assertIn("DHCP=ipv6", text)
-        self.assertIn("LLMNR=no", text)
-        self.assertIn("MulticastDNS=no", text)
 
     def test_refuse_bad_network_before_disk_work(self):
         for kw in [
-            dict(address="bad"),
-            dict(gateway="198.51.100.1"),
-            dict(dns="1.1.1.1\n[Match]"),
+            dict(address4="bad"),
+            dict(gateway4="198.51.100.1"),
+            dict(dns4="1.1.1.1\n[Match]"),
         ]:
-            args = dict(
-                network="static",
-                mac="52:54:00:12:34:56",
-                address="192.0.2.4/24",
-                gateway="192.0.2.1",
-                dns="192.0.2.53",
-            )
+            args = dict(ipv4="static", address4="192.0.2.4/24",
+                        gateway4="192.0.2.1", dns4="192.0.2.53")
             args.update(kw)
             with self.assertRaises(ValueError):
-                config.network_config(args)
+                config.network_config("eth0", args)
 
     def test_no_desktop_in_resolved_closure(self):
         packages.check(
@@ -269,6 +264,149 @@ class ServerKeyringTests(unittest.TestCase):
 
 
 
+class ServerInterfaceNetworkTests(unittest.TestCase):
+    INTERFACES = [
+        {"name": "enp1s0", "mac": "52:54:00:12:34:56"},
+        {"name": "enp2s0", "mac": "52:54:00:12:34:57"},
+    ]
+
+    def test_detect_ethernet_and_exclude_wifi_bridge_veth(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sysfs = Path(directory)
+            links = [
+                {"ifname": "enp2s0", "link_type": "ether", "address": "52:54:00:12:34:57"},
+                {"ifname": "enp1s0", "link_type": "ether", "address": "52:54:00:12:34:56"},
+                {"ifname": "wlp3s0", "link_type": "ether", "address": "52:54:00:12:34:58"},
+                {"ifname": "br0", "link_type": "ether"},
+                {"ifname": "veth0", "link_type": "ether"},
+                {"ifname": "lo", "link_type": "loopback"},
+            ]
+            for name in ("enp1s0", "enp2s0", "wlp3s0"):
+                (sysfs / name / "device").mkdir(parents=True)
+            (sysfs / "wlp3s0" / "wireless").mkdir()
+            self.assertEqual(config.ethernet_interfaces(links, sysfs), self.INTERFACES)
+
+    def test_two_default_interfaces_have_individual_profiles(self):
+        files = config.network_profiles(self.INTERFACES, {})
+        self.assertEqual(list(files), ["10-enp1s0.network", "10-enp2s0.network"])
+        for name, content in files.items():
+            self.assertIn(f"Name={name[3:-8]}", content)
+            self.assertEqual(content.count("[Match]"), 1)
+            self.assertIn("DHCP=ipv4", content)
+            self.assertIn("IPv6AcceptRA=yes", content)
+            self.assertIn("[DHCPv4]\nUseHostname=no", content)
+            self.assertIn("[DHCPv6]\nUseHostname=no", content)
+            self.assertNotIn("Name=*", content)
+
+    def test_ipv4_ipv6_modes_are_independent(self):
+        variants = [
+            ({"ipv4": "disabled"}, ["DHCP=no", "IPv6AcceptRA=yes", "LinkLocalAddressing=ipv6"]),
+            ({"ipv6": "disabled"}, ["DHCP=ipv4", "IPv6AcceptRA=no", "LinkLocalAddressing=no"]),
+            ({"ipv4": "disabled", "ipv6": "disabled"}, ["DHCP=no", "IPv6AcceptRA=no", "LinkLocalAddressing=no"]),
+            ({"ipv4": "static", "address4": "192.0.2.8/24"}, ["DHCP=no", "Address=192.0.2.8/24", "IPv6AcceptRA=yes"]),
+            ({"ipv6": "static", "address6": "2001:db8:1::2/64"}, ["DHCP=ipv4", "Address=2001:db8:1::2/64", "IPv6AcceptRA=no"]),
+            ({"ipv4": "static", "address4": "192.0.2.8/24", "ipv6": "static", "address6": "2001:db8:1::2/64"}, ["DHCP=no", "IPv6AcceptRA=no", "Address=192.0.2.8/24", "Address=2001:db8:1::2/64"]),
+        ]
+        for spec, expected in variants:
+            with self.subTest(spec=spec):
+                content = config.network_config("ens18", spec)
+                for line in expected:
+                    self.assertIn(line, content)
+                self.assertEqual(content.count("UseHostname=no"), 2)
+
+    def test_optional_static_gateways_dns_and_ipv6_link_local_gateway(self):
+        text = config.network_config("enp1s0", {
+            "ipv4": "static", "address4": "192.0.2.50/24",
+            "ipv6": "static", "address6": "2001:db8::20/64",
+            "gateway6": "fe80::1", "dns4": "192.0.2.53 192.0.2.54",
+            "dns6": ["2001:db8::53"],
+        })
+        self.assertNotIn("Gateway=192.0.2", text)
+        self.assertIn("Gateway=fe80::1", text)
+        self.assertIn("DNS=192.0.2.53", text)
+        self.assertIn("DNS=2001:db8::53", text)
+
+    def test_invalid_names_fields_addresses_modes_and_dns(self):
+        invalid = [
+            ("../evil", {}), ("eth0*", {}), ("eth0", {"ipv4": "auto"}),
+            ("eth0", {"ipv6": "dhcp"}),
+            ("eth0", {"address4": "192.0.2.5/24"}),
+            ("eth0", {"ipv4": "static", "address4": "192.0.2.5"}),
+            ("eth0", {"ipv4": "static", "address4": "192.0.2.5/99"}),
+            ("eth0", {"ipv4": "static", "address4": "2001:db8::5/64"}),
+            ("eth0", {"ipv6": "static", "address6": "192.0.2.5/24"}),
+            ("eth0", {"ipv6": "static", "address6": "2001:db8::5/129"}),
+            ("eth0", {"ipv6": "static", "address6": "2001:db8::5/64", "gateway6": "2001:db9::1"}),
+            ("eth0", {"dns4": "1.1.1.1\n[Network]"}),
+            ("eth0", {"dns6": "192.0.2.53"}),
+            ("eth0", {"ipv4": "disabled", "dns4": "1.1.1.1"}),
+            ("eth0", {"ipv4": "static", "address4": "192.0.2.5/24", "gateway4": 1}),
+            ("eth0", {"ipv6": "static", "address6": "2001:db8::5/64", "gateway6": None}),
+            ("eth0", {"ipv4": "static", "address4": ["192.0.2.5/24"]}),
+            ("eth0", {"something": "unexpected"}),
+        ]
+        for name, spec in invalid:
+            with self.subTest(name=name, spec=spec), self.assertRaises(ValueError):
+                config.network_config(name, spec)
+
+    def test_manual_overrides_are_per_link_only(self):
+        files = config.network_profiles(self.INTERFACES, {"network_interfaces": {
+            "enp2s0": {"ipv4": "disabled", "ipv6": "static", "address6": "2001:db8:2::5/64"},
+        }})
+        self.assertIn("DHCP=ipv4", files["10-enp1s0.network"])
+        self.assertIn("IPv6AcceptRA=yes", files["10-enp1s0.network"])
+        self.assertIn("DHCP=no", files["10-enp2s0.network"])
+        self.assertIn("Address=2001:db8:2::5/64", files["10-enp2s0.network"])
+        self.assertNotIn("192.0.2.", files["10-enp2s0.network"])
+
+    def test_missing_interface_or_duplicate_interface_refused(self):
+        with self.assertRaisesRegex(ValueError, "undetected"):
+            config.network_profiles(self.INTERFACES, {"network_interfaces": {"eth99": {}}})
+        with self.assertRaisesRegex(ValueError, "Duplicate"):
+            config.network_profiles(self.INTERFACES + [self.INTERFACES[0]], {})
+
+    def test_legacy_unattended_static_mac_still_resolves(self):
+        files = config.network_profiles(self.INTERFACES, {
+            "network": "static", "mac": "52:54:00:12:34:57", "address": "192.0.2.5/24",
+            "gateway": "192.0.2.1", "dns": "192.0.2.53 2001:db8::53",
+        })
+        self.assertIn("DHCP=ipv4", files["10-enp1s0.network"])
+        self.assertIn("Address=192.0.2.5/24", files["10-enp2s0.network"])
+        self.assertIn("DNS=2001:db8::53", files["10-enp2s0.network"])
+        with self.assertRaisesRegex(ValueError, "MAC does not match"):
+            config.network_profiles(self.INTERFACES, {
+                "network": "static", "mac": "52:54:00:12:34:99", "address": "192.0.2.5/24",
+            })
+
+    def test_target_profiles_are_readable_and_legacy_file_is_removed(self):
+        package = types.ModuleType("orchestrator")
+        package.__path__ = []
+        with patch.dict(sys.modules, {"orchestrator": package,
+                                     "orchestrator.phases_impl": types.SimpleNamespace()}):
+            server = load("orchestrator.network_test",
+                          "configs/airootfs/usr/share/omarchy-iso/orchestrator/server.py")
+        with tempfile.TemporaryDirectory() as name:
+            target = Path(name)
+            network_dir = target / "etc/systemd/network"
+            network_dir.mkdir(parents=True)
+            (network_dir / "20-omarchy-server.network").write_text("old catch-all")
+            ctx = types.SimpleNamespace(
+                target=target, state={"server_network_profiles": config.network_profiles(self.INTERFACES, {})},
+            )
+            before = os.umask(0o077)
+            try:
+                with patch.dict(sys.modules, {"server_config": config}):
+                    server.write_network_profiles(ctx)
+            finally:
+                os.umask(before)
+            self.assertEqual(sorted(p.name for p in network_dir.iterdir()),
+                             ["10-enp1s0.network", "10-enp2s0.network"])
+            self.assertEqual(network_dir.stat().st_mode & 0o777, 0o755)
+            for path in network_dir.iterdir():
+                self.assertEqual(path.stat().st_mode & 0o777, 0o644)
+                self.assertIn("UseHostname=no", path.read_text())
+
+
 class NetworkSecurityPolicyTests(unittest.TestCase):
     """Source-only dual-stack security checks, never touching the host firewall."""
 
@@ -305,14 +443,44 @@ class NetworkSecurityPolicyTests(unittest.TestCase):
         self.assertIn("[Resolve]", resolved)
         self.assertIn("LLMNR=no", resolved)
         self.assertIn("MulticastDNS=no", resolved)
-        for name, answers in (("dhcp", {}), ("static", dict(
-            network="static", mac="52:54:00:12:34:56", address="192.0.2.4/24",
-            gateway="192.0.2.1", dns="192.0.2.53 2001:db8::53"))):
+        for name, settings in (("dhcp", {}), ("static", dict(
+            ipv4="static", address4="192.0.2.4/24",
+            gateway4="192.0.2.1", dns4="192.0.2.53", dns6="2001:db8::53"))):
             with self.subTest(mode=name):
-                text = config.network_config(answers)
+                text = config.network_config("enp2s0", settings)
                 self.assertIn("LLMNR=no", text)
                 self.assertIn("MulticastDNS=no", text)
                 self.assertIn("IPv6AcceptRA=yes", text)
+
+    def test_live_archiso_dhcp_cannot_change_hostname(self):
+        # Exercise the actual staged-profile patch using synthetic ArchISO data.
+        with tempfile.TemporaryDirectory() as temporary:
+            profile = Path(temporary) / "20-ethernet.network"
+            profile.write_text("""[Match]
+Name=en*
+Name=eth*
+[Network]
+DHCP=yes
+MulticastDNS=yes
+[DHCPv4]
+RouteMetric=100
+[IPv6AcceptRA]
+RouteMetric=100
+""")
+            script = ROOT / "builder/server/security/configure-live-ethernet.sh"
+            subprocess.run(["bash", str(script), str(profile)], check=True)
+            output = profile.read_text()
+            for expected in ("DHCP=ipv4", "IPv6AcceptRA=yes", "LinkLocalAddressing=ipv6",
+                             "LLMNR=no", "MulticastDNS=no", "[DHCPv4]\nUseHostname=no",
+                             "[DHCPv6]\nUseHostname=no", "RouteMetric=100"):
+                self.assertIn(expected, output)
+            self.assertNotIn("DHCP=yes", output)
+            self.assertNotIn("MulticastDNS=yes", output)
+            self.assertNotIn("UseHostname=yes", output)
+            # An unknown upstream profile must fail rather than silently drift.
+            with self.assertRaises(subprocess.CalledProcessError):
+                subprocess.run(["bash", str(script), str(profile)], check=True,
+                               capture_output=True)
 
     def test_both_live_and_installed_policies_are_wired(self):
         build = (ROOT / "builder/server/build.sh").read_text()

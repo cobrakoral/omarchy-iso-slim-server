@@ -72,6 +72,9 @@ class InputValidationTests(unittest.TestCase):
             return original(args, *a, **kw)
         self.patchers = [patch.object(config, "SYSTEM_USERS", self.accounts),
                          patch.object(config, "SYSTEM_GROUPS", self.groups),
+                         patch.object(config, "ethernet_interfaces", return_value=[
+                             {"name": "enp1s0", "mac": "52:54:00:12:34:56"},
+                             {"name": "enp2s0", "mac": "52:54:00:12:34:57"}]),
                          patch.object(subprocess, "check_output", side_effect=check)]
         for item in self.patchers:
             item.start()
@@ -106,6 +109,25 @@ class InputValidationTests(unittest.TestCase):
                 self.ctx.user_credentials.pop(name)
         self.assertEqual(self.inventory, [])
         self.assertFalse(self.ctx.state_dir.exists())
+
+    def test_unknown_interface_refused_before_disk_inventory(self):
+        self.answers["network_interfaces"] = {"missing0": {"ipv4": "disabled"}}
+        conf, creds = config.make_config(self.answers, 16 * 1024**3)
+        self.ctx.user_configuration = conf
+        self.ctx.omarchy_install = conf["omarchy_install"]
+        self.ctx.user_credentials = creds
+        with self.assertRaisesRegex(ValueError, "undetected Ethernet"):
+            self.server.validate(self.ctx)
+        self.assertEqual(self.inventory, [])
+        self.assertFalse(self.ctx.state_dir.exists())
+
+    def test_detected_profiles_are_frozen_after_validation(self):
+        self.server.validate(self.ctx)
+        profiles = self.ctx.state["server_network_profiles"]
+        self.assertEqual(sorted(profiles), ["10-enp1s0.network", "10-enp2s0.network"])
+        for text in profiles.values():
+            self.assertIn("DHCP=ipv4", text)
+            self.assertIn("IPv6AcceptRA=yes", text)
 
     def test_sudo_requires_exact_true(self):
         for value in ("true", "false", 1, 0, [], None, False):

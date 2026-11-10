@@ -23,6 +23,7 @@ def validate(ctx):
     from server_config import (
         authorized_keys, make_config, require_candidate_disk,
         target_accounts, validate as validate_answers, validate_credentials,
+        ethernet_interfaces, network_profiles,
     )
 
     conf = ctx.user_configuration
@@ -53,6 +54,9 @@ def validate(ctx):
         encryption_password=ctx.user_credentials.get("encryption_password", ""),
     )
     validate_answers(answers, reserved)
+    # Freeze the detected interfaces and validate explicit overrides before
+    # disk release. A typo must never be discovered after formatting begins.
+    profiles = network_profiles(ethernet_interfaces(), answers)
     if bool(conf.get("disk_config", {}).get("disk_encryption")) != ctx.encrypt:
         raise ValueError("Encryption marker and disk configuration disagree")
     disk = shared._install_disk(ctx)
@@ -98,6 +102,7 @@ def validate(ctx):
     ctx.omarchy_install = expected_spec
     ctx.user_credentials = credentials
     ctx.state["server_authorized_keys"] = keys
+    ctx.state["server_network_profiles"] = profiles
     ctx.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     for attribute, data in (
         ("arch_config_path", {k: v for k, v in expected.items() if k != "omarchy_install"}),
@@ -204,17 +209,27 @@ def configure_network_security(ctx):
     chroot(ctx, "nft", "-c", "-f", "/etc/nftables.conf")
 
 
-def configure(ctx):
-    from server_config import network_config
+def write_network_profiles(ctx):
+    from server_config import ethernet_interfaces, network_profiles
 
+    profiles = ctx.state.get("server_network_profiles")
+    if profiles is None:
+        profiles = network_profiles(ethernet_interfaces(), ctx.omarchy_install.get("server", {}))
+    directory = ctx.target / "etc/systemd/network"
+    directory.mkdir(mode=0o755, parents=True, exist_ok=True)
+    directory.chmod(0o755)
+    # The previous edition used one catch-all; never leave it alongside
+    # explicit per-interface files.
+    (directory / "20-omarchy-server.network").unlink(missing_ok=True)
+    for filename, content in profiles.items():
+        write(ctx, "etc/systemd/network/" + filename, content)
+
+
+def configure(ctx):
     write(ctx, "etc/omarchy-edition", "server\n")
     configure_power_button(ctx)
     configure_network_security(ctx)
-    write(
-        ctx,
-        "etc/systemd/network/20-omarchy-server.network",
-        network_config(ctx.omarchy_install.get("server", {})),
-    )
+    write_network_profiles(ctx)
     resolv = ctx.target / "etc/resolv.conf"
     resolv.unlink(missing_ok=True)
     resolv.symlink_to("/run/systemd/resolve/stub-resolv.conf")

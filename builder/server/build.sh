@@ -37,8 +37,14 @@ cp /builder/server/automated.sh "$work/airootfs/root/.automated_script.sh"
 cp /builder/server/configurator "$work/airootfs/root/configurator"
 mkdir -p "$work/airootfs/usr/share/omarchy-iso"
 cp /builder/server/config.py "$work/airootfs/usr/share/omarchy-iso/server_config.py"
+install -Dm644 /builder/server/network-menu.sh "$work/airootfs/usr/share/omarchy-iso/server-network-menu.sh"
 install -Dm644 /builder/server/logind.conf "$work/airootfs/usr/share/omarchy-iso/server-logind.conf"
 install -Dm644 /builder/server/logind.conf "$work/airootfs/etc/systemd/logind.conf.d/90-omarchy-server-power-button.conf"
+# ArchISO releng's live DHCP Ethernet profile permits DHCP hostname changes.
+# Keep its broad bootstrap matching only on the live medium. The installed
+# target instead gets one explicit 10-<interface>.network per detected NIC.
+bash /builder/server/security/configure-live-ethernet.sh \
+  "$work/airootfs/etc/systemd/network/20-ethernet.network"
 # Live ISO policy: no LLMNR/mDNS, default-deny IPv4/IPv6 incoming traffic.
 # nftables.service is an early network-pre.service dependency and applies the
 # rules before live networking starts. Nothing is enabled on the build host.

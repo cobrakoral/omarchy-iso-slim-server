@@ -64,36 +64,134 @@ def supported_locales(text):
     return locales
 
 
-def network_config(answers):
+# A Linux interface name is at most 15 bytes. Reject metacharacters so it
+# can safely appear in both [Match] and a deterministic .network filename.
+INTERFACE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,14}\Z")
+MAC_ADDRESS = re.compile(r"(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}\Z")
+NETWORK_FIELDS = {"ipv4", "ipv6", "address4", "gateway4", "dns4", "address6", "gateway6", "dns6"}
+
+
+def ethernet_interfaces(links=None, sysfs=Path("/sys/class/net")):
+    """List physical/VM Ethernet links, excluding Wi-Fi and virtual bridges."""
+    if links is None:
+        links = json.loads(subprocess.check_output(["ip", "-j", "link", "show"], text=True))
+    found = {}
+    for link in links:
+        name = link.get("ifname")
+        if (
+            link.get("link_type") != "ether"
+            or not isinstance(name, str)
+            or not INTERFACE_NAME.fullmatch(name)
+            or not (sysfs / name / "device").exists()
+            or (sysfs / name / "wireless").exists()
+        ):
+            continue
+        if name in found:
+            raise ValueError("Duplicate detected Ethernet interface: " + name)
+        found[name] = {"name": name, "mac": str(link.get("address", "")).lower()}
+    return [found[name] for name in sorted(found)]
+
+
+def _dns_addresses(value, family):
+    if isinstance(value, str):
+        items = value.replace(",", " ").split()
+    elif isinstance(value, list) and all(isinstance(item, str) for item in value):
+        items = value
+    else:
+        raise ValueError("DNS servers must be addresses separated by spaces or a list")
+    parser = ipaddress.IPv4Address if family == 4 else ipaddress.IPv6Address
+    return [str(parser(item)) for item in items]
+
+
+def network_config(name, settings=None):
+    """Generate one explicit, independent IPv4/IPv6 networkd profile."""
+    if not isinstance(name, str) or not INTERFACE_NAME.fullmatch(name):
+        raise ValueError("Invalid Ethernet interface name")
+    if settings is None:
+        settings = {}
+    if not isinstance(settings, dict) or set(settings) - NETWORK_FIELDS:
+        raise ValueError("Unsupported interface network settings")
+    ipv4, ipv6 = settings.get("ipv4", "dhcp"), settings.get("ipv6", "auto")
+    if ipv4 not in ("dhcp", "static", "disabled") or ipv6 not in ("auto", "static", "disabled"):
+        raise ValueError("Unsupported IPv4 or IPv6 configuration mode")
+    lines = [
+        "[Match]", f"Name={name}", "", "[Network]",
+        f"DHCP={'ipv4' if ipv4 == 'dhcp' else 'no'}",
+        f"IPv6AcceptRA={'yes' if ipv6 == 'auto' else 'no'}",
+        f"LinkLocalAddressing={'ipv6' if ipv6 != 'disabled' else 'no'}",
+        "LLMNR=no", "MulticastDNS=no",
+    ]
+    for family, mode in ((4, ipv4), (6, ipv6)):
+        address = settings.get(f"address{family}", "")
+        gateway = settings.get(f"gateway{family}", "")
+        dns = settings.get(f"dns{family}", "")
+        if not isinstance(address, str) or not isinstance(gateway, str):
+            raise ValueError(f"IPv{family} address and gateway must be strings")
+        if mode == "static":
+            if not isinstance(address, str) or "/" not in address:
+                raise ValueError(f"Static IPv{family} requires an address with prefix")
+            parser = ipaddress.IPv4Interface if family == 4 else ipaddress.IPv6Interface
+            interface = parser(address)
+            lines.append(f"Address={interface}")
+            if gateway:
+                address_parser = ipaddress.IPv4Address if family == 4 else ipaddress.IPv6Address
+                route = address_parser(gateway)
+                if route not in interface.network and not (family == 6 and route.is_link_local):
+                    raise ValueError(f"IPv{family} gateway is outside the connected subnet")
+                lines.append(f"Gateway={route}")
+        elif address or gateway:
+            raise ValueError(f"IPv{family} address and gateway require static mode")
+        if mode == "disabled" and dns:
+            raise ValueError(f"Disabled IPv{family} cannot specify DNS servers")
+        lines.extend(f"DNS={server}" for server in _dns_addresses(dns, family))
+    # Both DHCP clients must leave the installer's static hostname intact.
+    lines += ["", "[DHCPv4]", "UseHostname=no", "", "[DHCPv6]", "UseHostname=no"]
+    return "\n".join(lines) + "\n"
+
+
+def _legacy_network_settings(answers):
+    """Keep previously generated unattended DHCP/static IPv4 answers valid."""
     mode = answers.get("network", "dhcp")
     if mode not in ("dhcp", "static"):
         raise ValueError("Network must be dhcp or static")
-    # Match hardware Ethernet/Wi-Fi links, never bridges/tunnels or loopback.
-    lines = ["[Match]", "Type=ether wlan"]
-    if mode == "static":
-        mac = answers.get("mac", "")
-        if not re.fullmatch(r"(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}", mac):
-            raise ValueError("Static networking requires an interface MAC address")
-        lines += [f"MACAddress={mac.lower()}"]
-    else:
-        lines += ["Path=*"]
-    lines += [
-        "", "[Network]", "IPv6AcceptRA=yes", "LinkLocalAddressing=ipv6",
-        "LLMNR=no", "MulticastDNS=no",
-    ]
     if mode == "dhcp":
-        lines += ["DHCP=yes"]
-    else:
-        address = ipaddress.IPv4Interface(answers["address"])
-        gateway = ipaddress.IPv4Address(answers["gateway"])
-        if gateway not in address.network:
-            raise ValueError("IPv4 gateway is outside the configured subnet")
-        lines += ["DHCP=ipv6", f"Address={address}", f"Gateway={gateway}"]
-        dns = answers.get("dns", "").replace(",", " ").split()
-        if not dns:
-            raise ValueError("Static networking needs at least one DNS address")
-        lines += [f"DNS={ipaddress.ip_address(d)}" for d in dns]
-    return "\n".join(lines) + "\n"
+        return {}
+    mac = answers.get("mac", "")
+    if not isinstance(mac, str) or not MAC_ADDRESS.fullmatch(mac):
+        raise ValueError("Static networking requires an interface MAC address")
+    dns4, dns6 = [], []
+    for address in str(answers.get("dns", "")).replace(",", " ").split():
+        parsed = ipaddress.ip_address(address)
+        (dns4 if parsed.version == 4 else dns6).append(str(parsed))
+    settings = {
+        "ipv4": "static", "address4": answers.get("address", ""),
+        "gateway4": answers.get("gateway", ""), "dns4": dns4, "dns6": dns6,
+    }
+    network_config("test0", settings)
+    return settings
+
+
+def network_profiles(interfaces, answers):
+    """Pair detected Ethernet links with overrides, defaulting every link."""
+    overrides = answers.get("network_interfaces", {})
+    if not isinstance(overrides, dict):
+        raise ValueError("Network interface overrides must be a JSON object")
+    for name, settings in overrides.items():
+        network_config(name, settings)
+    names = {link["name"] for link in interfaces}
+    if len(names) != len(interfaces):
+        raise ValueError("Duplicate Ethernet interface names")
+    if set(overrides) - names:
+        raise ValueError("Network configuration names an undetected Ethernet interface")
+    legacy = _legacy_network_settings(answers)
+    if legacy and overrides:
+        raise ValueError("Cannot combine legacy static network and per-interface settings")
+    if legacy:
+        matched = [link["name"] for link in interfaces if link["mac"] == answers["mac"].lower()]
+        if len(matched) != 1:
+            raise ValueError("Legacy static network MAC does not match a detected Ethernet interface")
+        overrides = {matched[0]: legacy}
+    return {f"10-{name}.network": network_config(name, overrides.get(name, {})) for name in sorted(names)}
 
 
 def validate_credentials(credentials):
@@ -251,7 +349,12 @@ def validate(answers, system_users=()):
             raise ValueError(f"{option} must be boolean")
     if answers.get("encrypt") and not answers.get("encryption_password"):
         raise ValueError("Encryption needs a passphrase")
-    network_config(answers)
+    _legacy_network_settings(answers)
+    overrides = answers.get("network_interfaces", {})
+    if not isinstance(overrides, dict):
+        raise ValueError("Network interface overrides must be a JSON object")
+    for name, settings in overrides.items():
+        network_config(name, settings)
 
 
 def make_config(answers, size, system_users=()):
@@ -373,7 +476,7 @@ def make_config(answers, size, system_users=()):
         "server": {
             k: v
             for k, v in answers.items()
-            if k in ("network", "address", "gateway", "dns", "mac", "cloud_init", "disk_seq")
+            if k in ("network", "address", "gateway", "dns", "mac", "network_interfaces", "cloud_init", "disk_seq")
         },
     }
     creds = {
@@ -397,6 +500,15 @@ if __name__ == "__main__":
         if not locales:
             sys.exit("No supported UTF-8 locales found in /etc/locale.gen.")
         print("\n".join(locales))
+        sys.exit(0)
+    if sys.argv[1:] == ["--list-interfaces"]:
+        print(json.dumps(ethernet_interfaces()))
+        sys.exit(0)
+    if len(sys.argv) == 3 and sys.argv[1] == "--render-interface":
+        try:
+            print(network_config(sys.argv[2], json.load(sys.stdin)), end="")
+        except (ValueError, KeyError, TypeError) as error:
+            sys.exit(str(error))
         sys.exit(0)
     if sys.argv[1:] == ["--list-disks"]:
         devices = lsblk_inventory()

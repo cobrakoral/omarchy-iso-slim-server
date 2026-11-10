@@ -32,6 +32,7 @@ RUNTIME = "84782475aeb885c8d05f9e85b6ad0f1a0add60e5"
 SERVER_TEST_SCRIPTS = (
     "unit.py",
     "input_validation.py",
+    "network_menu.py",
     "harness_guards.py",
     "operational_unit.py",
     "migrations.py",
