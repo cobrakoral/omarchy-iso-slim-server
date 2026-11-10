@@ -110,6 +110,54 @@ class ContextDeferProvisioningTest(unittest.TestCase):
         synthesized = json.loads(ctx.creds_path.read_text())
         self.assertEqual(synthesized["encryption_password"], password)
 
+    def test_sensitive_state_is_private_without_shell_umask(self):
+        self.write_config(self.base_config(defer_provisioning=True, disk_encryption={
+            "encryption_type": "luks", "partitions": ["x"],
+        }))
+        previous = os.umask(0o022)
+        try:
+            ctx = self.from_env()
+        finally:
+            os.umask(previous)
+        for path in (ctx.state_dir, ctx.arch_config_path, ctx.creds_path):
+            expected = 0o700 if path == ctx.state_dir else 0o600
+            self.assertEqual(path.stat().st_mode & 0o777, expected, str(path))
+        self.assertIn("encryption_password", ctx.arch_config_path.read_text())
+
+    def test_existing_permissive_state_is_hardened_before_writing(self):
+        self.write_config(self.base_config())
+        self.write_creds({"users": [{"username": "admin"}]})
+        self.state_dir.mkdir(mode=0o755)
+        self.state_dir.chmod(0o755)
+        existing = self.state_dir / "archinstall-user_configuration.json"
+        existing.write_text("OLD CONTENT")
+        existing.chmod(0o644)
+        ctx = self.from_env()
+        self.assertEqual(ctx.state_dir.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(ctx.arch_config_path.stat().st_mode & 0o777, 0o600)
+        self.assertNotIn("OLD CONTENT", ctx.arch_config_path.read_text())
+
+    def test_state_output_symlink_does_not_overwrite_external_file(self):
+        self.write_config(self.base_config())
+        self.write_creds({"users": [{"username": "admin"}]})
+        self.state_dir.mkdir()
+        innocent = self.dir / "keep-me"
+        innocent.write_text("KEEP")
+        (self.state_dir / "archinstall-user_configuration.json").symlink_to(innocent)
+        with self.assertRaises(OSError):
+            self.from_env()
+        self.assertEqual(innocent.read_text(), "KEEP")
+
+    def test_symlinked_state_directory_is_refused(self):
+        self.write_config(self.base_config())
+        self.write_creds({"users": [{"username": "admin"}]})
+        external = self.dir / "outside"
+        external.mkdir()
+        self.state_dir.symlink_to(external, target_is_directory=True)
+        with self.assertRaisesRegex(RuntimeError, "symlink"):
+            self.from_env()
+        self.assertEqual(list(external.iterdir()), [])
+
     def test_deferred_provisioning_reuses_rig_supplied_passphrase(self):
         self.write_config(self.base_config(defer_provisioning=True, disk_encryption={
             "encryption_type": "luks", "partitions": ["x"],

@@ -28,6 +28,17 @@ def validate_language(language: Any, registry: Path | None = None) -> None:
         raise RuntimeError(f"Unsupported language: {language!r}")
 
 
+def _write_private_json(path: Path, data: dict) -> None:
+    # Keep credential-bearing configuration private even without the live
+    # installer's umask. Never follow an existing output symlink.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w") as stream:
+        os.fchmod(stream.fileno(), 0o600)
+        stream.truncate(0)
+        json.dump(data, stream, indent=2)
+        stream.write("\n")
+
+
 @dataclass
 class InstallContext:
     config_path: Path
@@ -109,7 +120,10 @@ class InstallContext:
             _strip_account_fields(arch_configuration)
 
         state_dir = Path(os.environ.get("OMARCHY_INSTALL_STATE_DIR", "/run/omarchy-install"))
-        state_dir.mkdir(parents=True, exist_ok=True)
+        state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if state_dir.is_symlink():
+            raise RuntimeError("Installer state directory must not be a symlink")
+        state_dir.chmod(0o700)
 
         if defer_provisioning:
             # Encrypted deferred-provisioning installs have no user password to protect LUKS
@@ -119,11 +133,10 @@ class InstallContext:
             # the credentials file.
             _inject_provisioning_encryption_password(arch_configuration, user_credentials)
             creds_path = state_dir / "provisioning-user_credentials.json"
-            creds_path.write_text(json.dumps(user_credentials, indent=2) + "\n")
-            creds_path.chmod(0o600)
+            _write_private_json(creds_path, user_credentials)
 
         arch_config_path = state_dir / "archinstall-user_configuration.json"
-        arch_config_path.write_text(json.dumps(arch_configuration, indent=2) + "\n")
+        _write_private_json(arch_config_path, arch_configuration)
 
         ctx = cls(
             config_path=config_path,
