@@ -17,6 +17,8 @@ import time
 import tempfile
 import pexpect
 
+from network_devices import UserNetwork
+
 ROOT = Path(__file__).resolve().parents[2]
 PASSWORD = "Disposable-Server-Test-2026"
 GUEST_ASSERTIONS = r"""
@@ -383,10 +385,21 @@ def main():
     )
     parser.add_argument("--bios", action="store_true")
     parser.add_argument("--static", action="store_true")
+    parser.add_argument("--data-nic", action="store_true",
+                        help="Attach the data NIC during installation to qualify per-interface defaults")
     parser.add_argument("--cloud-init", action="store_true")
     parser.add_argument("--encrypt", action="store_true")
     parser.add_argument("--port", type=int, default=2422)
     opts = parser.parse_args()
+    networks = None
+    if opts.data_nic:
+        # Both links must exist at install time: the installer deliberately
+        # writes an explicit .network profile only for detected interfaces.
+        networks = [
+            UserNetwork(restricted=True),
+            UserNetwork(mac="52:54:00:12:34:57", subnet="10.0.3.0/24",
+                        prefix="fd00:3::/64", restricted=True),
+        ]
     if opts.run_directory and opts.reuse:
         raise ValueError("--run-directory and --reuse are mutually exclusive")
     with opts.iso.open("rb") as image:
@@ -479,6 +492,7 @@ def main():
             [opts.iso.resolve(), cidata],
             installer=True,
             bios=opts.bios,
+            networks=networks,
         )
         try:
             initial = vm.child.expect(
@@ -519,7 +533,7 @@ def main():
                 },
             )
         media.append(instance)
-    vm = VM(directory, disk, opts.port, media, bios=opts.bios)
+    vm = VM(directory, disk, opts.port, media, bios=opts.bios, networks=networks)
     try:
         if opts.encrypt:
             vm.child.expect("(?i)passphrase", timeout=180)
@@ -629,6 +643,7 @@ printf changed > /etc/rollback-proof
             "iso_sha256": iso_hash,
             "source_revision": source_revision,
             "source_dirty": source_dirty,
+            "data_nic_at_install": bool(opts.data_nic),
             "harness_sha256": harness_hash,
             "packages": installed_packages,
             "disk": str(disk),

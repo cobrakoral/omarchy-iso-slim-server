@@ -113,6 +113,8 @@ def main():
         raise ValueError(
             "Networking matrix currently requires the default UEFI baseline"
         )
+    if baseline.get("data_nic_at_install") is not True:
+        raise ValueError("Networking baseline must be installed with --data-nic")
     disk_source = base / "system.qcow2"
     original_hash = sha(disk_source)
     source_hashes = {name: sha(ROOT / name) for name in SOURCES}

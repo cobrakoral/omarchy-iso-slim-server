@@ -629,7 +629,7 @@ def _main_locked(args, output, cache, work, work_lock):
     cases = run_record["cases"]
     bases = {}
     for name, options in [
-        ("base", []),
+        ("base", ["--data-nic"]),
         ("cloud", ["--cloud-init"]),
         ("bios", ["--bios"]),
         ("luks", ["--encrypt"]),
