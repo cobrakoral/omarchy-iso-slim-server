@@ -633,6 +633,103 @@ class ISOReleaseSigningTests(unittest.TestCase):
             self.assertTrue((directory / "UNOFFICIAL-SIGNING-KEY.asc").stat().st_size)
             self.assertEqual((directory / (iso.name + ".sha256")).read_text(), f"{digest}  {iso.name}\n")
 
+    def test_signing_recovery_and_validation(self):
+        import json
+        import hashlib
+
+        if not shutil.which("gpg"):
+            self.skipTest("GnuPG unavailable")
+        signer = load("server_release_signing_recovery", "builder/server/sign-release.py")
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            home = directory / "gnupg"
+            home.mkdir(mode=0o700)
+            command = ["gpg", "--homedir", str(home), "--batch"]
+            subprocess.run(
+                command + ["--passphrase", "", "--pinentry-mode", "loopback",
+                           "--quick-generate-key", "ISO Release Test <test@example.invalid>",
+                           "ed25519", "sign", "0"],
+                check=True, capture_output=True,
+            )
+            listing = subprocess.check_output(command + ["--with-colons", "--list-keys"], text=True)
+            fingerprint = next(line.split(":")[9] for line in listing.splitlines() if line.startswith("fpr:"))
+
+            iso = directory / "omarchy-slim-server-unofficial-test-x86_64.iso"
+            iso.write_bytes(b"synthetic test ISO")
+            digest = hashlib.sha256(iso.read_bytes()).hexdigest()
+            revision = "a" * 40
+            (directory / "SHA256SUMS").write_text(f"{digest}  {iso.name}\n")
+            (directory / "server-build-inputs.json").write_text(json.dumps({"source_revision": revision, "source_dirty": False}))
+            (directory / "server-source-revision.txt").write_text(revision + "\n")
+            (directory / "server-source-status.txt").write_text("")
+            (directory / "server-release-acceptance.json").write_text(json.dumps({
+                "passed": True, "source_revision": revision, "iso": str(iso),
+                "iso_sha256": digest,
+                "installs": {name: {} for name in ("base", "bios", "cloud", "luks")},
+            }))
+
+            artifacts = [
+                iso.name + ".sha256",
+                iso.name + ".sig",
+                "SHA256SUMS.asc",
+                "server-release-acceptance.json.asc",
+                "UNOFFICIAL-SIGNING-KEY.asc",
+            ]
+
+            env = {"GNUPGHOME": str(home)}
+            real_replace = os.replace
+            replace_calls = 0
+
+            def fail_second_replace(src, dst):
+                nonlocal replace_calls
+                replace_calls += 1
+                if replace_calls == 2:
+                    raise OSError("Simulated crash during publication")
+                return real_replace(src, dst)
+
+            # 1. Partial publication after failure on 2nd os.replace
+            with patch.dict(os.environ, env), patch.object(signer, "FINGERPRINT", fingerprint):
+                with patch("os.replace", side_effect=fail_second_replace):
+                    with self.assertRaises(OSError):
+                        signer.sign(directory)
+
+                # Exactly one artifact was replaced before failure
+                self.assertTrue((directory / artifacts[0]).is_file())
+                self.assertFalse((directory / artifacts[1]).exists())
+
+                # 2. Reject tampered partial checksum
+                (directory / artifacts[0]).write_text("bad checksum\n")
+                with self.assertRaises(ValueError):
+                    signer.sign(directory)
+
+                # Restore authentic partial checksum
+                (directory / artifacts[0]).write_text(f"{digest}  {iso.name}\n")
+
+                # 3. Successful retry recovers and publishes remaining artifacts
+                signer.sign(directory)
+                for name in artifacts:
+                    self.assertTrue((directory / name).is_file())
+
+                # Verify signatures
+                for signature, source in (
+                    (iso.with_name(iso.name + ".sig"), iso),
+                    (directory / "SHA256SUMS.asc", directory / "SHA256SUMS"),
+                    (directory / "server-release-acceptance.json.asc", directory / "server-release-acceptance.json"),
+                ):
+                    subprocess.run(command + ["--verify", str(signature), str(source)],
+                                   check=True, capture_output=True)
+
+                # 4. Reject complete already-signed release
+                with self.assertRaises(ValueError):
+                    signer.sign(directory)
+
+                # 5. Reject tampered partial signature
+                # Remove one artifact to make it partial, then tamper an existing signature
+                (directory / artifacts[4]).unlink()
+                (directory / artifacts[1]).write_bytes(b"tampered signature")
+                with self.assertRaises(ValueError):
+                    signer.sign(directory)
+
     def test_server_build_rejects_initramfs_errors(self):
         build = (ROOT / "builder/server/build.sh").read_text()
         self.assertIn('"$work/airootfs/etc/mkinitcpio.d/linux-t2.preset"', build)

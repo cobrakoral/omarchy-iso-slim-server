@@ -54,6 +54,19 @@ def run(*args):
     return subprocess.run(args, check=True, capture_output=True, text=True)
 
 
+def verify_signature(signature_path, source_path):
+    if signature_path.is_symlink() or not signature_path.is_file():
+        return False
+    try:
+        result = run("gpg", "--batch", "--status-fd=1", "--verify", str(signature_path), str(source_path))
+    except subprocess.CalledProcessError:
+        return False
+    return any(
+        line.startswith("[GNUPG:] VALIDSIG ") and FINGERPRINT in line.split()
+        for line in result.stdout.splitlines()
+    )
+
+
 def sign(directory):
     iso, checksum = validated_release(directory)
     artifacts = [
@@ -63,32 +76,62 @@ def sign(directory):
         "server-release-acceptance.json.asc",
         "UNOFFICIAL-SIGNING-KEY.asc",
     ]
-    if any((directory / name).exists() or (directory / name).is_symlink() for name in artifacts):
+
+    expected_key_text = run("gpg", "--armor", "--export", FINGERPRINT).stdout
+    if not expected_key_text.strip():
+        raise ValueError("Maintainer public key was not exported")
+
+    sig_sources = {
+        artifacts[1]: iso,
+        artifacts[2]: directory / "SHA256SUMS",
+        artifacts[3]: directory / "server-release-acceptance.json",
+    }
+
+    # Check existing artifacts in directory
+    existing = {}
+    for name in artifacts:
+        target = directory / name
+        if target.exists() or target.is_symlink():
+            if target.is_symlink() or not target.is_file():
+                raise ValueError(f"Existing artifact {name} is invalid or a symlink")
+            # Verify artifact authenticity and match with current accepted inputs/pinned signer
+            if name == artifacts[0]:
+                if target.read_text() != checksum:
+                    raise ValueError(f"Existing checksum {name} does not match accepted release")
+            elif name in sig_sources:
+                if not verify_signature(target, sig_sources[name]):
+                    raise ValueError(f"Existing signature {name} does not verify against pinned signer and current accepted inputs")
+            elif name == artifacts[4]:
+                if target.read_text() != expected_key_text:
+                    raise ValueError(f"Existing key {name} does not match pinned signer export")
+            existing[name] = True
+
+    if len(existing) == len(artifacts):
         raise ValueError("Signing outputs already exist; do not replace an accepted generation")
+
+    missing = [name for name in artifacts if name not in existing]
+
     with tempfile.TemporaryDirectory(prefix=".server-sign-", dir=directory) as temporary:
         work = Path(temporary)
-        (work / artifacts[0]).write_text(checksum)
-        for source, target, armored in (
-            (iso, work / artifacts[1], False),
-            (directory / "SHA256SUMS", work / artifacts[2], True),
-            (directory / "server-release-acceptance.json", work / artifacts[3], True),
+        if artifacts[0] in missing:
+            (work / artifacts[0]).write_text(checksum)
+        for name, source, armored in (
+            (artifacts[1], iso, False),
+            (artifacts[2], directory / "SHA256SUMS", True),
+            (artifacts[3], directory / "server-release-acceptance.json", True),
         ):
-            command = ["gpg", "--batch", "--local-user", FINGERPRINT]
-            if armored:
-                command.append("--armor")
-            run(*command, "--detach-sign", "--output", str(target), str(source))
-            result = run("gpg", "--batch", "--status-fd=1", "--verify", str(target), str(source))
-            valid = any(
-                line.startswith("[GNUPG:] VALIDSIG ")
-                and FINGERPRINT in line.split()
-                for line in result.stdout.splitlines()
-            )
-            if not valid:
-                raise ValueError("Signature does not identify the pinned maintainer")
-        (work / artifacts[4]).write_text(run("gpg", "--armor", "--export", FINGERPRINT).stdout)
-        if not (work / artifacts[4]).stat().st_size:
-            raise ValueError("Maintainer public key was not exported")
-        for name in artifacts:
+            if name in missing:
+                target = work / name
+                command = ["gpg", "--batch", "--local-user", FINGERPRINT]
+                if armored:
+                    command.append("--armor")
+                run(*command, "--detach-sign", "--output", str(target), str(source))
+                if not verify_signature(target, source):
+                    raise ValueError("Signature does not identify the pinned maintainer")
+        if artifacts[4] in missing:
+            (work / artifacts[4]).write_text(expected_key_text)
+
+        for name in missing:
             os.replace(work / name, directory / name)
     print("SIGNED_ACCEPTED_SERVER_ISO", iso)
 
