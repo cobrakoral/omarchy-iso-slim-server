@@ -70,18 +70,33 @@ shared indexer. It advertises the complete transaction, while the shipped
 archives contain only cloud-init's delta over the root image. Both are
 SHA-256 checked before the installer formats a disk. This retains upstream's
 ISO-integrity trust model (`SigLevel=Never` for its internal offline repo).
-Verify the unofficial ISO's checksum/signature before writing installation
-media. The release directory includes `SHA256SUMS`, an ISO `.sha256`, a binary
-ISO `.sig`, `SHA256SUMS.asc`, and `UNOFFICIAL-SIGNING-KEY.asc`. The signing
-identity is the fork maintainer, not Omarchy. Its primary fingerprint is
-`7C5C6FEB40A5B493007FAA3650B1EB533F640140`.
+A **local build is unsigned**. It contains the ISO and `SHA256SUMS`, which
+checks file integrity but does not authenticate the publisher. After the full
+`test/server/release.py` qualification has written a passing
+`server-release-acceptance.json`, the maintainer may sign that accepted local
+generation with an explicit, separate step (no upload or publication):
 
 ```sh
-cd release/server-<build-generation>
+python3 builder/server/sign-release.py release/server-<accepted-generation>
+```
+
+The signing command refuses failed, incomplete, tampered, or previously signed
+release directories. It adds an ISO `.sha256`, binary ISO `.sig`,
+`SHA256SUMS.asc`, signed acceptance JSON, and `UNOFFICIAL-SIGNING-KEY.asc`.
+The signing identity is the fork maintainer, not Omarchy. Independently verify
+the maintainer's primary fingerprint
+`7C5C6FEB40A5B493007FAA3650B1EB533F640140` before trusting its public key.
+For **signed, accepted releases**, verify before writing installation media:
+
+```sh
+cd release/server-<accepted-generation>
 sha256sum --check SHA256SUMS
 gpg --import UNOFFICIAL-SIGNING-KEY.asc
+gpg --fingerprint 7C5C6FEB40A5B493007FAA3650B1EB533F640140
+gpg --verify SHA256SUMS.asc SHA256SUMS
 gpg --verify omarchy-slim-server-unofficial-YYYY.MM.DD-x86_64.iso.sig \
   omarchy-slim-server-unofficial-YYYY.MM.DD-x86_64.iso
+gpg --verify server-release-acceptance.json.asc server-release-acceptance.json
 ```
 The installed server channel requires trusted package **and database** signatures.
 
@@ -612,6 +627,12 @@ IPv6 Internet connectivity still requires a suitable upstream network.
 ### Network acceptance matrix
 
 ```sh
+# Mandatory fully offline test: isolates QEMU and fixtures in a rootless
+# loopback-only Linux network namespace (requires unshare and iproute2).
+python3 test/server/networking.py test-runs/server/<accepted-default-UEFI-run> \
+  --model all
+
+# Optional, explicitly permits public DNS/HTTPS for the signed channel check.
 python3 test/server/networking.py test-runs/server/<accepted-default-UEFI-run> \
   --model all --external
 ```
@@ -624,8 +645,11 @@ and HTTPS checks. Both create new copy-on-write disks and leave the accepted
 backing disk unchanged. The full matrix tests
 virtio, e1000 and RTL8139 data NIC models alongside a management NIC. A third
 isolated Ethernet socket peer records DHCP REQUEST/ACK renewal exchanges;
-it binds only to host loopback and never serves the host LAN. The original
-offline suites retain `restrict=on` networking.
+it binds only to loopback and never serves the host LAN. Mandatory runs
+launch QEMU and all fixtures within an isolated loopback-only user/network
+namespace, so real DHCP routes and local fixture connectivity are preserved
+without any host route to the Internet. The harness fails closed if namespace
+creation fails; `--external` is the only opt-in unrestricted mode.
 
 With `--external`, the virtio case additionally fetches and verifies the
 live signed channel. Its mandatory IPv6-only phase runs detached with both

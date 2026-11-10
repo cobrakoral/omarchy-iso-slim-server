@@ -546,6 +546,102 @@ RouteMetric=100
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
+class ISOReleaseSigningTests(unittest.TestCase):
+    def test_signing_requires_full_acceptance_and_untampered_iso(self):
+        import json
+        import hashlib
+
+        signer = load("server_release_signing", "builder/server/sign-release.py")
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            iso = directory / "omarchy-slim-server-unofficial-test-x86_64.iso"
+            iso.write_bytes(b"local-test-image")
+            digest = hashlib.sha256(iso.read_bytes()).hexdigest()
+            (directory / "SHA256SUMS").write_text(f"{digest}  {iso.name}\n")
+            (directory / "server-source-revision.txt").write_text("a" * 40 + "\n")
+            (directory / "server-source-status.txt").write_text("")
+            (directory / "server-build-inputs.json").write_text(json.dumps({
+                "source_revision": "a" * 40, "source_dirty": False,
+            }))
+            receipt = {
+                "passed": True, "source_revision": "a" * 40,
+                "iso": str(iso), "iso_sha256": digest,
+                "installs": {name: {} for name in ("base", "bios", "cloud", "luks")},
+            }
+            accepted = directory / "server-release-acceptance.json"
+            accepted.write_text(json.dumps(receipt))
+            self.assertEqual(signer.validated_release(directory)[0], iso)
+            for kind in ("incomplete", "tampered", "previously-signed"):
+                with self.subTest(kind=kind):
+                    if kind == "incomplete":
+                        receipt["installs"].pop("bios")
+                        accepted.write_text(json.dumps(receipt))
+                        with self.assertRaises(ValueError):
+                            signer.sign(directory)
+                        receipt["installs"]["bios"] = {}
+                        accepted.write_text(json.dumps(receipt))
+                    elif kind == "tampered":
+                        iso.write_bytes(b"tampered")
+                        with self.assertRaises(ValueError):
+                            signer.sign(directory)
+                        iso.write_bytes(b"local-test-image")
+                    else:
+                        (directory / (iso.name + ".sig")).write_text("existing")
+                        with self.assertRaises(ValueError):
+                            signer.sign(directory)
+            self.assertFalse((directory / "SHA256SUMS.asc").exists())
+
+    def test_signing_produces_real_verifiable_artifacts(self):
+        import json
+        import hashlib
+
+        if not shutil.which("gpg"):
+            self.skipTest("GnuPG unavailable")
+        signer = load("server_release_signing_positive", "builder/server/sign-release.py")
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            home = directory / "gnupg"
+            home.mkdir(mode=0o700)
+            command = ["gpg", "--homedir", str(home), "--batch"]
+            subprocess.run(command + ["--passphrase", "", "--pinentry-mode", "loopback",
+                                       "--quick-generate-key", "ISO Release Test <test@example.invalid>",
+                                       "ed25519", "sign", "0"], check=True, capture_output=True)
+            listing = subprocess.check_output(command + ["--with-colons", "--list-keys"], text=True)
+            fingerprint = next(line.split(":")[9] for line in listing.splitlines() if line.startswith("fpr:"))
+            iso = directory / "omarchy-slim-server-unofficial-test-x86_64.iso"
+            iso.write_bytes(b"synthetic test ISO")
+            digest = hashlib.sha256(iso.read_bytes()).hexdigest()
+            revision = "a" * 40
+            (directory / "SHA256SUMS").write_text(f"{digest}  {iso.name}\n")
+            (directory / "server-build-inputs.json").write_text(json.dumps({"source_revision": revision, "source_dirty": False}))
+            (directory / "server-source-revision.txt").write_text(revision + "\n")
+            (directory / "server-source-status.txt").write_text("")
+            (directory / "server-release-acceptance.json").write_text(json.dumps({
+                "passed": True, "source_revision": revision, "iso": str(iso),
+                "iso_sha256": digest,
+                "installs": {name: {} for name in ("base", "bios", "cloud", "luks")},
+            }))
+            with patch.dict(os.environ, {"GNUPGHOME": str(home)}), patch.object(signer, "FINGERPRINT", fingerprint):
+                signer.sign(directory)
+                for signature, source in (
+                    (iso.with_name(iso.name + ".sig"), iso),
+                    (directory / "SHA256SUMS.asc", directory / "SHA256SUMS"),
+                    (directory / "server-release-acceptance.json.asc", directory / "server-release-acceptance.json"),
+                ):
+                    subprocess.run(command + ["--verify", str(signature), str(source)],
+                                   check=True, capture_output=True)
+            self.assertTrue((directory / "UNOFFICIAL-SIGNING-KEY.asc").stat().st_size)
+            self.assertEqual((directory / (iso.name + ".sha256")).read_text(), f"{digest}  {iso.name}\n")
+
+    def test_server_build_rejects_initramfs_errors(self):
+        build = (ROOT / "builder/server/build.sh").read_text()
+        self.assertIn('"$work/airootfs/etc/mkinitcpio.d/linux-t2.preset"', build)
+        self.assertNotIn("archiso_pxe_nbd", build)
+        self.assertIn("mkarchiso_log=/server-cache/mkarchiso.log", build)
+        self.assertIn("^==> ERROR:", build)
+        self.assertIn("^error: command failed to execute correctly", build)
+
+
 class OptimizedAcceptanceTests(unittest.TestCase):
     def test_acceptance_checks_cannot_disappear_under_python_optimization(self):
         # Assert statements and their side effects disappear under -O/-OO.
