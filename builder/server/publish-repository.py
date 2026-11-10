@@ -16,6 +16,50 @@ def git(*args, cwd=ROOT):
     return subprocess.check_output(["git", "-C", str(cwd), *args], text=True).strip()
 
 
+def stage_publication(sources, work, maintainer_fingerprint):
+    """Stage signed files only into real worktree paths, never through links."""
+    destination = work / "stable/x86_64"
+    # Reject links before mkdir or copy2 can follow them outside this worktree.
+    for directory in (work, work / "stable", destination):
+        if directory.is_symlink():
+            raise ValueError(f"Publication directory must not be a symlink: {directory}")
+        if directory.exists() and not directory.is_dir():
+            raise ValueError(f"Publication directory is not a directory: {directory}")
+    readme = work / "README.md"
+    if readme.is_symlink():
+        raise ValueError("Publication README must not be a symlink")
+    if readme.exists() and not readme.is_file():
+        raise ValueError("Publication README must be a regular file")
+    destination.mkdir(parents=True, exist_ok=True)
+    for source in sources:
+        target = destination / source.name
+        if target.is_symlink():
+            raise ValueError(f"Published artifact must not be a symlink: {target}")
+        if target.exists() and not target.is_file():
+            raise ValueError(f"Published artifact is not a regular file: {target}")
+        if (
+            ".pkg.tar." in source.name
+            and target.exists()
+            and target.read_bytes() != source.read_bytes()
+        ):
+            raise ValueError(
+                "Published package bytes are immutable; reuse the archive or bump its version: "
+                + source.name
+            )
+        shutil.copy2(source, target)
+    # Retain older versioned archives for clients whose database is cached.
+    readme.write_text(
+        "# Unofficial Omarchy Slim Server packages\n\n"
+        "Signed community package channel for x86_64. Not an official Omarchy release.\n\n"
+        "Source and installation instructions: "
+        "https://github.com/cobrakoral/omarchy-iso-slim-server/blob/feature/slim-server/README.server.md\n\n"
+        "Pinned maintainer fingerprint: " + maintainer_fingerprint + "\n\n"
+        "Packages and repository databases require trusted signatures. Versioned archives "
+        "are never replaced; old versions remain available for cached database clients.\n"
+    )
+    return destination
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("repository", type=Path)
@@ -52,30 +96,7 @@ def main():
     else:
         git("worktree", "add", "--detach", str(work), "HEAD")
         git("switch", "--orphan", "package-publication-" + stamp, cwd=work)
-    destination = work / "stable/x86_64"
-    destination.mkdir(parents=True, exist_ok=True)
-    for source in sources:
-        target = destination / source.name
-        if (
-            ".pkg.tar." in source.name
-            and target.exists()
-            and target.read_bytes() != source.read_bytes()
-        ):
-            raise ValueError(
-                "Published package bytes are immutable; reuse the archive or bump its version: "
-                + source.name
-            )
-        shutil.copy2(source, target)
-    # Retain older versioned archives for clients whose database is cached.
-    (work / "README.md").write_text(
-        "# Unofficial Omarchy Slim Server packages\n\n"
-        "Signed community package channel for x86_64. Not an official Omarchy release.\n\n"
-        "Source and installation instructions: "
-        "https://github.com/cobrakoral/omarchy-iso-slim-server/blob/feature/slim-server/README.server.md\n\n"
-        "Pinned maintainer fingerprint: " + verifier.FINGERPRINT + "\n\n"
-        "Packages and repository databases require trusted signatures. Versioned archives "
-        "are never replaced; old versions remain available for cached database clients.\n"
-    )
+    destination = stage_publication(sources, work, verifier.FINGERPRINT)
     verifier.verify(destination)
     git("add", "stable/x86_64", "README.md", cwd=work)
     git(

@@ -23,6 +23,12 @@ pkg_repo_spec = importlib.util.spec_from_file_location(
 )
 pkg_repo = importlib.util.module_from_spec(pkg_repo_spec)
 pkg_repo_spec.loader.exec_module(pkg_repo)
+publisher_spec = importlib.util.spec_from_file_location(
+    "publish_repository", ROOT / "builder/server/publish-repository.py"
+)
+publisher = importlib.util.module_from_spec(publisher_spec)
+publisher_spec.loader.exec_module(publisher)
+
 IMAGE = "ghcr.io/archlinux/archlinux@sha256:" + "a" * 64
 
 
@@ -568,6 +574,62 @@ class PackageRepositoryStageTests(unittest.TestCase):
         with patch.object(pkg_repo, "verify", return_value=[]):
             staged = pkg_repo.stage(self.source, self.dest)
         self.assertEqual(stat.S_IMODE(staged.stat().st_mode), 0o700)
+
+
+class PackagePublicationSafetyTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.work = self.root / "publication"
+        self.work.mkdir()
+        self.source = self.root / "omarchy-server.asc"
+        self.source.write_text("signed public material")
+
+    def test_symlinked_destination_file_cannot_overwrite_another_file(self):
+        destination = self.work / "stable/x86_64"
+        destination.mkdir(parents=True)
+        innocent = self.root / "outside"
+        innocent.write_text("must survive")
+        (destination / self.source.name).symlink_to(innocent)
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            publisher.stage_publication([self.source], self.work, pkg_repo.FINGERPRINT)
+        self.assertEqual(innocent.read_text(), "must survive")
+
+    def test_symlinked_directory_cannot_redirect_publication(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        (self.work / "stable").symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            publisher.stage_publication([self.source], self.work, pkg_repo.FINGERPRINT)
+        self.assertFalse((outside / "x86_64").exists())
+
+    def test_symlinked_readme_cannot_overwrite_another_file(self):
+        outside = self.root / "outside"
+        outside.write_text("must survive")
+        (self.work / "README.md").symlink_to(outside)
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            publisher.stage_publication([self.source], self.work, pkg_repo.FINGERPRINT)
+        self.assertEqual(outside.read_text(), "must survive")
+
+    def test_existing_versioned_archive_cannot_change(self):
+        archive = self.root / "omarchy-server-1-1-any.pkg.tar.zst"
+        archive.write_bytes(b"different new version")
+        destination = self.work / "stable/x86_64"
+        destination.mkdir(parents=True)
+        (destination / archive.name).write_bytes(b"published bytes")
+        with self.assertRaisesRegex(ValueError, "immutable"):
+            publisher.stage_publication([archive], self.work, pkg_repo.FINGERPRINT)
+        self.assertEqual((destination / archive.name).read_bytes(), b"published bytes")
+
+    def test_regular_existing_metadata_can_be_refreshed(self):
+        destination = self.work / "stable/x86_64"
+        destination.mkdir(parents=True)
+        (destination / self.source.name).write_text("previous")
+        target = publisher.stage_publication([self.source], self.work, pkg_repo.FINGERPRINT)
+        self.assertEqual(target, destination)
+        self.assertEqual((destination / self.source.name).read_text(), "signed public material")
+        self.assertIn("Unofficial Omarchy Slim Server", (self.work / "README.md").read_text())
 
 
 class CompactionJournalTests(unittest.TestCase):
