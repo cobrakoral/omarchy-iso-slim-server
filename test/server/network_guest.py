@@ -105,11 +105,24 @@ def record(phase, body):
 def baseline(args):
     def ready():
         links = [interface(mac) for mac in (MANAGEMENT_MAC, DATA_MAC)]
-        return (
-            links
-            if all("Lease" in link.get("DHCPv4Client", {}) for link in links)
-            else None
-        )
+        for link in links:
+            if "Lease" not in link.get("DHCPv4Client", {}):
+                return None
+            # Verify usable SLAAC addresses on both installed profiles, not
+            # merely an IPv6AcceptRA=yes line in a configuration file.
+            if not any(
+                address.get("Family") == 10
+                and address.get("ConfigSource") == "NDisc"
+                and "tentative" not in (address.get("FlagsString") or "")
+                for address in link.get("Addresses", [])
+            ):
+                return None
+            if not any(
+                route.get("Family") == 10 and route.get("ConfigSource") == "NDisc"
+                for route in link.get("Routes", [])
+            ):
+                return None
+        return links
 
     links = eventually(ready)
     for link in links:
@@ -479,20 +492,18 @@ def static_check(args):
 
 
 def ipv6_configure(args):
-    content = f"""[Match]
-Name={interface(DATA_MAC)['Name']}
-[Network]
-DHCP=no
-IPv6AcceptRA=no
-LinkLocalAddressing=ipv6
-Address=fd00:3::15/64
-Gateway=fd00:3::2
-DNS=[fd00:3::2]:{args.port}
-Domains=~.
-DNSDefaultRoute=yes
-[DHCPv4]
-UseHostname=no
-"""
+    # Persist the exact generator output used by interactive and unattended
+    # installs. The DNS test fixture uses a nonstandard port only at runtime.
+    import config
+
+    name = interface(DATA_MAC)["Name"]
+    content = config.network_config(name, {
+        "ipv4": "disabled",
+        "ipv6": "static",
+        "address6": "fd00:3::15/64",
+        "gateway6": "fd00:3::2",
+        "dns6": "fd00:3::2",
+    })
     record(
         "ipv6-configure",
         {
@@ -530,9 +541,24 @@ def ipv6_only(args):
         ).hexdigest()
         if not (digest == prior["configuration_sha256"]):
             raise AssertionError
+        import config
+        expected = config.network_config(data, {
+            "ipv4": "disabled", "ipv6": "static",
+            "address6": "fd00:3::15/64", "gateway6": "fd00:3::2",
+            "dns6": "fd00:3::2",
+        })
+        if Path("/etc/systemd/network/09-network-acceptance-data.network").read_text() != expected:
+            raise AssertionError("Persisted static IPv6 profile differs from generator")
+        addresses = json.loads(command("ip", "-j", "-6", "address", "show", "dev", data))
+        if not any(a.get("local") == "fd00:3::15" for a in addresses[0].get("addr_info", [])):
+            raise AssertionError("Generated static IPv6 address was not restored after reboot")
         routes = json.loads(command("ip", "-j", "-6", "route", "show", "default"))
         if not (any(r["dev"] == data for r in routes)):
             raise AssertionError(routes)
+        # Resolver override points to our local DNS fixture's nonstandard
+        # port; the underlying installed profile remains generator-exact.
+        command("resolvectl", "dns", data, f"[fd00:3::2]:{args.port}")
+        command("resolvectl", "domain", data, "~.")
         text = dns(data, "AAAA")
         with socket.create_connection(("fd00:3::15", 22), timeout=5) as connection:
             banner = connection.recv(100).decode().strip()

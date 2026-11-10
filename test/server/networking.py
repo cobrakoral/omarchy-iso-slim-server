@@ -10,12 +10,15 @@ from contextlib import contextmanager
 import hashlib
 import http.server
 import json
+import os
 from pathlib import Path
 import shutil
+import socket
 import socket
 import threading
 import time
 import subprocess
+import sys
 
 from network_devices import UserNetwork, DHCPNetwork
 from dhcp_fixture import dhcp_peer
@@ -102,6 +105,21 @@ def main():
         help="Also fetch and verify the real HTTPS channel from the guest",
     )
     args = parser.parse_args()
+    if not args.external:
+        # QEMU restrict=on blocks access to loopback fixtures and suppresses
+        # DHCP gateway routes. Use an isolated host network namespace instead:
+        # the guest gets real DHCP routes but no path to the outside Internet.
+        if os.environ.get("OMARCHY_NETWORK_ACCEPTANCE_ISOLATED") != "1":
+            env = os.environ.copy()
+            env["OMARCHY_NETWORK_ACCEPTANCE_ISOLATED"] = "1"
+            subprocess.run([
+                "unshare", "--user", "--map-root-user", "--net", "--",
+                "sh", "-c", 'ip link set lo up && exec "$@"', "sh",
+                sys.executable, *sys.argv,
+            ], env=env, check=True)
+            return
+        if {name for _, name in socket.if_nameindex()} != {"lo"}:
+            raise RuntimeError("Offline acceptance requires a loopback-only network namespace")
     base = args.base.resolve()
     if (
         not base.is_relative_to(ROOT / "test-runs/server")
@@ -212,6 +230,7 @@ def main():
                 denied = subprocess.run(
                     [
                         "ssh",
+                        "-F", "/dev/null",
                         "-o",
                         "StrictHostKeyChecking=no",
                         "-o",

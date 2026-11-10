@@ -293,6 +293,7 @@ class VM:
         result = sp.run(
             [
                 "ssh",
+                "-F", "/dev/null",  # No host SSH config inside rootless network namespaces.
                 "-i",
                 str(self.path / "key"),
                 "-o",
