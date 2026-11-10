@@ -3,6 +3,8 @@ import ast
 import importlib.util
 import os
 import shutil
+import socket
+import struct
 import subprocess
 from pathlib import Path
 import unittest
@@ -550,7 +552,7 @@ class OptimizedAcceptanceTests(unittest.TestCase):
         for name in (
             "operational.py", "operational_guest.py", "operational_workload.py",
             "network_guest.py", "networking.py", "failures.py",
-            "prepare_repository.py", "dhcp_fixture.py",
+            "prepare_repository.py", "dhcp_fixture.py", "dns_fixture.py",
         ):
             with self.subTest(file=name):
                 path = ROOT / "test/server" / name
@@ -561,6 +563,43 @@ class OptimizedAcceptanceTests(unittest.TestCase):
                     f"Acceptance checks in {name} must use explicit failures, not assert",
                 )
                 compile(code, str(path), "exec", optimize=2)
+
+
+class DNSFixtureTests(unittest.TestCase):
+    def test_local_ipv4_ipv6_dns_answers_without_upstream(self):
+        fixture = load("dns_fixture", "test/server/dns_fixture.py")
+        qname = fixture.QNAME
+        # The fixture binds only loopback sockets; no public resolver is used.
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        with fixture.dns_peer(port) as events:
+            for family, host, record in (
+                (socket.AF_INET, "127.0.0.1", 1),
+                (socket.AF_INET, "127.0.0.1", 28),
+                (socket.AF_INET6, "::1", 1),
+                (socket.AF_INET6, "::1", 28),
+            ):
+                with self.subTest(family=family, record=record), socket.socket(family, socket.SOCK_DGRAM) as sock:
+                    sock.settimeout(2)
+                    query = struct.pack("!HHHHHH", 0x1234, 0x0100, 1, 0, 0, 0)
+                    query += qname + struct.pack("!HH", record, 1)
+                    sock.sendto(query, (host, port))
+                    reply, _ = sock.recvfrom(4096)
+                    self.assertEqual(reply[:2], query[:2])
+                    self.assertEqual(reply[6:8], b"\x00\x01")
+                    self.assertIn(fixture.ANSWERS[record], reply)
+        self.assertEqual({event["type"] for event in events}, {"A", "AAAA"})
+        self.assertEqual({event["guest_transport"] for event in events}, {"IPv4 UDP", "IPv6 UDP"})
+
+    def test_local_dns_fixture_rejects_other_names_and_invalid_queries(self):
+        fixture = load("dns_fixture", "test/server/dns_fixture.py")
+        header = struct.pack("!HHHHHH", 0x1234, 0x0100, 1, 0, 0, 0)
+        query = header + fixture.QNAME + struct.pack("!HH", 1, 1)
+        self.assertIsNotNone(fixture.answer(query))
+        self.assertIsNone(fixture.answer(query.replace(b"omarchy", b"example")))
+        self.assertIsNone(fixture.answer(header + fixture.QNAME + struct.pack("!HH", 16, 1)))
+        self.assertIsNone(fixture.answer(query[:8]))
 
 
 if __name__ == "__main__":

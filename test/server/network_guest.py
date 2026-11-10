@@ -67,10 +67,14 @@ def http(address, port):
     return body
 
 
-def dns(expected):
+def dns(expected, record="A"):
+    # The host-loopback fixture answers this test-only name without Internet.
     command("resolvectl", "flush-caches")
-    text = command("resolvectl", "query", "--protocol=dns", "--type=A", "github.com")
-    if not (f"link: {expected}" in text):
+    text = command(
+        "resolvectl", "query", "--protocol=dns", f"--type={record}", "dns.omarchy.test"
+    )
+    address = {"A": "192.0.2.53", "AAAA": "2001:db8::53"}[record]
+    if not (f"link: {expected}" in text and address in text):
         raise AssertionError(text)
     return text
 
@@ -147,8 +151,10 @@ def baseline(args):
         "baseline",
         {
             "links": links,
-            "dns_a": command("resolvectl", "query", "--protocol=dns", "--type=A", "github.com"),
-            "dns_aaaa": command("resolvectl", "query", "--protocol=dns", "--type=AAAA", "one.one.one.one"),
+            "dns_servers": {
+                link["Name"]: command("resolvectl", "dns", link["Name"])
+                for link in links
+            },
             "listeners": listeners,
             "services": command(
                 "systemctl", "is-active", "sshd", "systemd-networkd", "systemd-resolved"
@@ -168,9 +174,10 @@ DHCP=ipv4
 IPv6AcceptRA=no
 LinkLocalAddressing=ipv6
 DNSDefaultRoute=yes
+DNS=10.0.2.2:{args.port}
 [DHCPv4]
 RouteMetric=2000
-UseDNS=yes
+UseDNS=no
 UseHostname=no
 """,
     )
@@ -183,14 +190,16 @@ DHCP=yes
 IPv6AcceptRA=yes
 DNSDefaultRoute=yes
 Domains=~.
+DNS=10.0.3.2:{args.port}
 [DHCPv4]
 RouteMetric=100
-UseDNS=yes
+UseDNS=no
 UseHostname=no
 [DHCPv6]
 UseHostname=no
 [IPv6AcceptRA]
 RouteMetric=100
+UseDNS=no
 """,
     )
     write(
@@ -276,7 +285,12 @@ def recovered(args):
 
 def external(args):
     data = interface(DATA_MAC)["Name"]
-    text = dns(data)
+    # Public DNS and TLS verification are strictly opt-in.
+    command("resolvectl", "dns", data, "10.0.3.3")
+    command("resolvectl", "flush-caches")
+    text = command("resolvectl", "query", "--protocol=dns", "--type=A", "github.com")
+    if f"link: {data}" not in text:
+        raise AssertionError(text)
     url = "https://raw.githubusercontent.com/cobrakoral/omarchy-iso-slim-server/server-packages/stable/x86_64/"
     dest = Path("/run/network-channel")
     dest.mkdir(exist_ok=True)
@@ -380,9 +394,10 @@ def ipv4_only(args):
         return link
 
     eventually(ready)
+    command("resolvectl", "dns", name, f"10.0.3.2:{args.port}")
     command("resolvectl", "domain", name, "~.")
     a = eventually(lambda: dns(name))
-    aaaa = command("resolvectl", "query", "--protocol=dns", "--type=AAAA", "one.one.one.one")
+    aaaa = dns(name, "AAAA")
     record("ipv4-only", {
         "configuration_sha256": digest,
         "dns_a_over_ipv4": a,
@@ -396,6 +411,8 @@ def static(args):
     # This is the actual installer generator from the source tree under test.
     import config
 
+    # Drop the preceding IPv4-only phase's temporary DNS fixture override.
+    command("resolvectl", "revert", interface(DATA_MAC)["Name"])
     content = config.network_config(interface(DATA_MAC)["Name"], {
         "ipv4": "static", "address4": "10.0.3.40/24",
         "gateway4": "10.0.3.2", "dns4": "10.0.3.3",
@@ -516,12 +533,7 @@ def ipv6_only(args):
         routes = json.loads(command("ip", "-j", "-6", "route", "show", "default"))
         if not (any(r["dev"] == data for r in routes)):
             raise AssertionError(routes)
-        command("resolvectl", "flush-caches")
-        text = command(
-            "resolvectl", "query", "--protocol=dns", "--type=AAAA", "one.one.one.one"
-        )
-        if not (f"link: {data}" in text):
-            raise AssertionError(text)
+        text = dns(data, "AAAA")
         with socket.create_connection(("fd00:3::15", 22), timeout=5) as connection:
             banner = connection.recv(100).decode().strip()
         if not (banner.startswith("SSH-2.0-")):

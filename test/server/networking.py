@@ -299,12 +299,13 @@ def main():
                     if not (result["passed"]):
                         raise AssertionError
                     results["ipv6-only"] = result
-                    if not (
-                        dns_events and any(
-                        event["answer_count"] > 0 for event in dns_events
-                    )
+                    if not any(
+                        event["type"] == "AAAA"
+                        and event["guest_transport"] == "IPv6 UDP"
+                        and event["answer_count"] == 1
+                        for event in dns_events
                     ):
-                        raise AssertionError
+                        raise AssertionError("IPv6-only DNS query did not reach local fixture")
                     results["ipv6-health"] = health(vm)
                 if not (
                     {

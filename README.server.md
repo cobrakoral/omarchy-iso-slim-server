@@ -625,13 +625,14 @@ isolated Ethernet socket peer records DHCP REQUEST/ACK renewal exchanges;
 it binds only to host loopback and never serves the host LAN. The original
 offline suites retain `restrict=on` networking.
 
-The virtio case additionally fetches and verifies the live signed channel,
-and runs a detached IPv6-only phase with both IPv4-capable NICs disconnected.
-Its IPv6 HTTP endpoint and DNS endpoint are host-loopback fixtures. The DNS
-endpoint forwards real AAAA queries through the host's IPv4 resolver because
-the validation host has no upstream IPv6 route. This proves guest IPv6-only
-transport, not public IPv6 Internet reachability. Receipts record ISO/source
-hashes, actual kernel NIC drivers, routes, resolver selection, renewal packets,
+With `--external`, the virtio case additionally fetches and verifies the
+live signed channel. Its mandatory IPv6-only phase runs detached with both
+IPv4-capable NICs disconnected. The HTTP and DNS endpoints are host-loopback
+fixtures: DNS serves deterministic test-only A/AAAA records over IPv4 and
+IPv6, without forwarding queries or requiring public resolvers. This proves
+guest IPv6-only transport, not public IPv6 Internet reachability. Receipts
+record ISO/source hashes, actual kernel NIC drivers, routes, resolver selection,
+renewal packets,
 SSH authentication refusal, listening ports and cold-boot service health.
 Physical NICs, storage controllers and Secure Boot require separate validation.
 
