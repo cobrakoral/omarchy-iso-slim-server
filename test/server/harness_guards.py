@@ -14,12 +14,35 @@ import types
 import unittest
 from unittest.mock import Mock, patch
 import qemu
+import console
 from system_upgrade import maintenance_package
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("package_repository", ROOT / "builder/server/package-repository.py")
 repository = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(repository)
+
+class WeakPasswordConsoleTests(unittest.TestCase):
+    def test_console_declines_then_explicitly_accepts_weak_password(self):
+        actions = []
+        terminal = Mock()
+
+        def answer(prompt, value="", clear=False):
+            actions.append((prompt, value))
+
+        self.assertLess(len(console.WEAK_PASSWORD), 8)
+        console.exercise_weak_password_dialogue(terminal, answer, console.WEAK_PASSWORD)
+        self.assertEqual(actions, [
+            ("Administrator password", console.WEAK_PASSWORD),
+            ("Confirm password", console.WEAK_PASSWORD),
+        ] * 2)
+        self.assertEqual([call.args[0] for call in terminal.send.call_args_list],
+                         ["\r", "\x1b[D\r"])
+        self.assertEqual(
+            [call.args[0] for call in terminal.expect.call_args_list],
+            ["Weak password.", "fewer than 8 characters", "Are you sure"] * 2,
+        )
+
 
 class QmpShutdownTests(unittest.TestCase):
     def test_missing_greeting_times_out(self):

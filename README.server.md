@@ -680,6 +680,12 @@ python test/server/update.py test-runs/server/<successful-base-run> release/omar
   --repository .server-work/signed-channel/stable/x86_64
 ```
 
+The interactive Gum acceptance deliberately enters a short password, declines
+the first weak-password warning, retries, and explicitly selects **Use Anyway**.
+It then verifies console login and password SSH authentication with that
+password. This test applies only to future release qualifications; previously
+published ISO images remain unchanged.
+
 Manual recovery/update tests and `qemu.py --reuse` create new copy-on-write
 overlays and preserve their source installations. Internal recovery runs may
 use `--in-place` only on an unaccepted leaf work disk; the helper refuses

@@ -8,7 +8,23 @@ import hashlib
 import json
 import subprocess
 import pexpect
-from qemu import VM, ROOT, PASSWORD, run
+from qemu import VM, ROOT, run
+
+
+# An intentionally weak credential for a disposable acceptance VM only.
+WEAK_PASSWORD = "short7!"
+
+
+def exercise_weak_password_dialogue(child, answer, password):
+    """Decline the default-No warning, then explicitly select Use Anyway."""
+    for accept in (False, True):
+        answer("Administrator password", password)
+        answer("Confirm password", password)
+        child.expect("Weak password.", timeout=60)
+        child.expect("fewer than 8 characters", timeout=60)
+        child.expect("Are you sure", timeout=60)
+        # Gum defaults to Choose Another. Left selects Use Anyway.
+        child.send("\x1b[D\r" if accept else "\r")
 
 
 def main():
@@ -44,8 +60,7 @@ def main():
         answer("Console keyboard layout")
         answer("Hostname", "slim-test", True)
         answer("Administrator username")
-        answer("Administrator password", PASSWORD)
-        answer("Confirm password", PASSWORD)
+        exercise_weak_password_dialogue(vm.child, answer, WEAK_PASSWORD)
         answer("Timezone")
         answer("Networking")
         answer("Optional path to SSH public-key file")
@@ -68,7 +83,7 @@ def main():
         vm.child.expect("slim-test login:", timeout=180)
         vm.child.sendline("admin")
         vm.child.expect("Password:")
-        vm.child.sendline(PASSWORD)
+        vm.child.sendline(WEAK_PASSWORD)
         vm.child.expect("admin@slim-test")
         with (directory / "password-ssh.log").open("w") as log:
             child = pexpect.spawn(
@@ -91,16 +106,16 @@ def main():
             )
             child.logfile = log
             child.expect("password:")
-            child.sendline(PASSWORD)
+            child.sendline(WEAK_PASSWORD)
             child.expect("password for admin:")
-            child.sendline(PASSWORD)
+            child.sendline(WEAK_PASSWORD)
             child.expect("(?i)passwordauthentication yes")
             child.expect(pexpect.EOF)
             child.close()
             if child.exitstatus:
                 raise RuntimeError("Password SSH check failed")
         (directory / "console-pass.txt").write_text(
-            "Gum wizard, unencrypted install, default no cloud-init, console password login, password SSH fallback: PASS\n"
+            "Gum weak-password warning declined then approved, console and password SSH login, no cloud-init: PASS\n"
         )
         with opts.iso.open("rb") as stream:
             if hashlib.file_digest(stream, "sha256").hexdigest() != iso_hash:
@@ -108,7 +123,7 @@ def main():
         (directory / "console-pass.json").write_text(json.dumps(dict(
             passed=True, iso_sha256=iso_hash, source_revision=source,
             harness_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-            checks="Gum wizard, console password, password SSH fallback, no cloud-init by default",
+            checks="Gum weak-password decline and explicit approval; console and SSH login; no cloud-init",
         ), indent=2) + "\n")
         print("CONSOLE_AND_PASSWORD_SSH_PASS", directory, flush=True)
     finally:
