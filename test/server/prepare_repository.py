@@ -160,7 +160,8 @@ def main():
     archives = subprocess.check_output(
         ["makepkg", "--packagelist"], cwd=build, text=True
     ).splitlines()
-    assert len(archives) == 1
+    if not (len(archives) == 1):
+        raise AssertionError
     package = Path(archives[0])
     run("gpg", "--batch", "--yes", "-u", KEY, "--detach-sign", str(package))
     repo = output / "migration"

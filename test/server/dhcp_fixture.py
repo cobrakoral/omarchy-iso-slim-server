@@ -180,7 +180,8 @@ def dhcp_peer():
     peer.thread.start()
     try:
         yield peer
-        assert not peer.errors, peer.errors
+        if not (not peer.errors):
+            raise AssertionError(peer.errors)
     finally:
         peer.done.set()
         peer.listener.close()

@@ -162,7 +162,8 @@ def main():
                 "python3 /run/operational/operational_guest.py " + name + " " + extra
             )
         )
-        assert value["passed"]
+        if not (value["passed"]):
+            raise AssertionError
         if (work / (name + ".json")).exists():
             history = work / "phase-history"
             history.mkdir(exist_ok=True)
@@ -180,24 +181,28 @@ def main():
             "cat /etc/machine-id; sha256sum /etc/ssh/ssh_host_ed25519_key.pub"
         )
         before = health(vm)
-        assert before["packages"] == 176
+        if not (before["packages"] == 176):
+            raise AssertionError
         if args.resume_work:
             results["soak"] = json.loads((work / "soak.json").read_text())
-            assert (
+            if not (
                 results["soak"]["passed"]
                 and results["soak"]["elapsed_seconds"] >= args.seconds
-            )
+            ):
+                raise AssertionError
             # Only rows committed by the measured load are compared. An interrupted
             # online-backup writer may have added independently named later rows.
             proof = vm.sudo(
                 "python3 - <<'LOAD'\nimport sqlite3,json,hashlib\nc=sqlite3.connect('/var/lib/server-acceptance/database.sqlite3')\nr=c.execute(\"select token,payload from records where token like 'worker-%' order by token\").fetchall()\nprint(json.dumps({'records':len(r),'sha256':hashlib.sha256(json.dumps(r,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()}))\nLOAD"
             )
-            assert (
-                json.loads(proof) == results["soak"]["database"]
-            ), "Previously acknowledged workload data changed"
-            assert vm.sudo("sha256sum /opt/server-acceptance/app.py").split()[0] == sha(
+            if not (json.loads(proof) == results["soak"]["database"]):
+                raise AssertionError("Previously acknowledged workload data changed")
+            if not (
+                vm.sudo("sha256sum /opt/server-acceptance/app.py").split()[0] == sha(
                 share / "operational_workload.py"
             )
+            ):
+                raise AssertionError
             results["resumed_workload"] = {
                 "passed": True,
                 "verified_record_digest": json.loads(proof),
@@ -209,7 +214,8 @@ def main():
             soaked = results["soak"]["database"]
             vm.stop()
             vm = boot(directory, share)
-            assert phase("check")["database"] == soaked
+            if not (phase("check")["database"] == soaked):
+                raise AssertionError
         backup_started = time.monotonic()
         backup = phase("backup")
         plain = backups / "application.tar"
@@ -281,10 +287,11 @@ def main():
         )
         vm = boot(directory, share)
         phase("boundaries")
-        assert (
+        if not (
             results["boundaries"]["database"]["records"]
             == backup["source_after_backup"]["records"]
-        )
+        ):
+            raise AssertionError
         source_health = health(vm)
         vm.stop()
         vm = None
@@ -318,7 +325,8 @@ def main():
             ],
             capture_output=True,
         )
-        assert corrupted.returncode != 0
+        if not (corrupted.returncode != 0):
+            raise AssertionError
         if bad_output.exists():
             bad_output.unlink()
         try:
@@ -342,7 +350,8 @@ def main():
             ],
             capture_output=True,
         )
-        assert missing.returncode != 0 and not bad_output.exists()
+        if not (missing.returncode != 0 and not bad_output.exists()):
+            raise AssertionError
         results["negative_backup"] = {
             "tampered_signature_rejected": signature_rejected,
             "gpg_authentication_rejected_corruption": True,
@@ -355,7 +364,8 @@ def main():
             "acceptance-pass.json",
         )
         receipt = json.loads((destination / "acceptance-pass.json").read_text())
-        assert receipt["iso_sha256"] == iso_hash and not receipt["source_dirty"]
+        if not (receipt["iso_sha256"] == iso_hash and not receipt["source_dirty"]):
+            raise AssertionError
         compact(
             destination
         )  # Still standalone; never rebase recovery onto a source disk.
@@ -371,16 +381,19 @@ def main():
                 text=True,
             )
         )
-        assert len(chain) == 1
+        if not (len(chain) == 1):
+            raise AssertionError
         delivery = work / "recovery-delivery"
         delivery.mkdir(mode=0o700)
         for name in ("operational_guest.py", "operational_workload.py"):
             shutil.copy2(share / name, delivery / name)
         restore_started = time.monotonic()
         package.pinned_signature(cipher)
-        assert sha(cipher) == cipher_hash
+        if not (sha(cipher) == cipher_hash):
+            raise AssertionError
         tar = delivery / "application.tar"
-        assert not tar.exists()
+        if not (not tar.exists()):
+            raise AssertionError
         logged(
             [
                 "gpg",
@@ -401,36 +414,45 @@ def main():
         fresh_identity = vm.sudo(
             "cat /etc/machine-id; sha256sum /etc/ssh/ssh_host_ed25519_key.pub"
         )
-        assert fresh_identity != original_identity
+        if not (fresh_identity != original_identity):
+            raise AssertionError
         clean = vm.sudo(
             "test ! -e /opt/server-acceptance; test ! -e /var/lib/server-acceptance; test ! -e /var/log/server-acceptance-marker; test ! -e /var/cache/pacman/pkg/server-acceptance-marker; printf FRESH_TARGET_EMPTY"
         )
         restored = phase("restore", "--archive /run/operational/application.tar")
-        assert restored["database"] == backup["database"]
+        if not (restored["database"] == backup["database"]):
+            raise AssertionError
         restored_at = time.monotonic()
-        assert (
+        if not (
             vm.sudo("cat /etc/machine-id; sha256sum /etc/ssh/ssh_host_ed25519_key.pub")
             == fresh_identity
-        )
+        ):
+            raise AssertionError
         post = phase("post_restore")
-        assert post["database"]["records"] == backup["database"]["records"] + 1
+        if not (post["database"]["records"] == backup["database"]["records"] + 1):
+            raise AssertionError
         restored_health = health(vm)
-        assert restored_health["packages"] == 176
+        if not (restored_health["packages"] == 176):
+            raise AssertionError
         vm.stop()
         vm = boot(destination, delivery)
-        assert phase("check")["database"] == post["database"]
+        if not (phase("check")["database"] == post["database"]):
+            raise AssertionError
         cold_health = health(vm)
-        assert (
+        if not (
             vm.sudo("cat /etc/machine-id; sha256sum /etc/ssh/ssh_host_ed25519_key.pub")
             == fresh_identity
-        )
-        assert sha(base / "system.qcow2") == base_hash and sha(iso) == iso_hash
-        assert (
+        ):
+            raise AssertionError
+        if not (sha(base / "system.qcow2") == base_hash and sha(iso) == iso_hash):
+            raise AssertionError
+        if not (
             subprocess.check_output(
                 ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
             ).strip()
             == source_revision
-        )
+        ):
+            raise AssertionError
         record = {
             "passed": True,
             "source_revision": source_revision,

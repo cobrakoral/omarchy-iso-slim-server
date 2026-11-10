@@ -185,7 +185,8 @@ def main():
                     for line in text.splitlines()
                     if line.startswith("{")
                 ]
-                assert records and all(r["passed"] for r in records)
+                if not (records and all(r["passed"] for r in records)):
+                    raise AssertionError
                 for result in records:
                     results[result["phase"]] = result
 
@@ -197,14 +198,15 @@ def main():
                     for link in results["baseline"]["links"]
                     if link.get("HardwareAddress") == [82, 84, 0, 18, 52, 87]
                 )
-                assert (
+                if not (
                     data_link["Driver"]
                     in {
                         "virtio": ("virtio_net",),
                         "e1000": ("e1000",),
                         "rtl8139": ("8139cp", "8139too"),
                     }[model]
-                )
+                ):
+                    raise AssertionError
                 denied = subprocess.run(
                     [
                         "ssh",
@@ -227,21 +229,26 @@ def main():
                     capture_output=True,
                     timeout=10,
                 )
-                assert (
+                if not (
                     denied.returncode == 255
                     and "Permission denied (publickey)" in denied.stderr
-                ), denied.stderr
+                ):
+                    raise AssertionError(denied.stderr)
                 results["password-rejected"] = {
                     "passed": True,
                     "negotiated_result": denied.stderr,
                 }
                 phase("configure")
                 phase("renew")
-                assert "return" in qmp(
+                if not (
+                    "return" in qmp(
                     vm.qmp, "set_link", {"name": "nic1", "up": False}
                 )
+                ):
+                    raise AssertionError
                 phase("lost")
-                assert "return" in qmp(vm.qmp, "set_link", {"name": "nic1", "up": True})
+                if not ("return" in qmp(vm.qmp, "set_link", {"name": "nic1", "up": True})):
+                    raise AssertionError
                 phase("recovered")
                 if args.external and model == "virtio":
                     phase("external")
@@ -253,7 +260,8 @@ def main():
                 vm = boot()
                 phase("static-check")
                 normal_health = health(vm)
-                assert normal_health["packages"] == 176
+                if not (normal_health["packages"] == 176):
+                    raise AssertionError
                 if model == "virtio":
                     phase("ipv6-configure")
                     vm.stop()
@@ -261,20 +269,25 @@ def main():
                     vm.sudo(
                         f"systemd-run --unit=server-ipv6-acceptance --collect /usr/bin/python3 /run/network-acceptance/network_guest.py ipv6-only --port {port}"
                     )
-                    assert "return" in qmp(
+                    if not (
+                        "return" in qmp(
                         vm.qmp, "set_link", {"name": "nic0", "up": False}
                     )
-                    assert "return" in qmp(
+                    ):
+                        raise AssertionError
+                    if not (
+                        "return" in qmp(
                         vm.qmp, "set_link", {"name": "nic2", "up": False}
                     )
+                    ):
+                        raise AssertionError
                     try:
                         index = vm.child.expect(
                             ["IPV6_ONLY_ACCEPTANCE_PASS", "IPV6_ONLY_ACCEPTANCE_FAIL"],
                             timeout=100,
                         )
-                        assert (
-                            index == 0
-                        ), "IPv6-only phase failed; see guest journal and serial evidence"
+                        if not (index == 0):
+                            raise AssertionError("IPv6-only phase failed; see guest journal and serial evidence")
                     finally:
                         qmp(vm.qmp, "set_link", {"name": "nic0", "up": True})
                         qmp(vm.qmp, "set_link", {"name": "nic2", "up": True})
@@ -282,20 +295,31 @@ def main():
                     result = json.loads(
                         vm.sudo("cat /var/log/server-network-acceptance/ipv6-only.json")
                     )
-                    assert result["passed"]
+                    if not (result["passed"]):
+                        raise AssertionError
                     results["ipv6-only"] = result
-                    assert dns_events and any(
+                    if not (
+                        dns_events and any(
                         event["answer_count"] > 0 for event in dns_events
                     )
+                    ):
+                        raise AssertionError
                     results["ipv6-health"] = health(vm)
-                assert {
+                if not (
+                    {
                     name: sha(ROOT / name) for name in SOURCES
-                } == source_hashes, "Test source changed during the run"
-                assert sha(disk_source) == original_hash, "Backing installation changed"
-                assert any(
+                } == source_hashes
+                ):
+                    raise AssertionError("Test source changed during the run")
+                if not (sha(disk_source) == original_hash):
+                    raise AssertionError("Backing installation changed")
+                if not (
+                    any(
                     event["message"] == "REQUEST" and event["ciaddr"] == "10.0.4.15"
                     for event in peer.events
-                ), "No unicast DHCP renewal observed"
+                )
+                ):
+                    raise AssertionError("No unicast DHCP renewal observed")
                 record = {
                     "passed": True,
                     "model": model,

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import ast
 import importlib.util
 import os
 import shutil
@@ -373,6 +374,25 @@ class NetworkSecurityPolicyTests(unittest.TestCase):
         result = subprocess.run(["sudo", "-n", "nft", "-c", "-f", str(self.policy)],
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class OptimizedAcceptanceTests(unittest.TestCase):
+    def test_acceptance_checks_cannot_disappear_under_python_optimization(self):
+        # Assert statements and their side effects disappear under -O/-OO.
+        for name in (
+            "operational.py", "operational_guest.py", "operational_workload.py",
+            "network_guest.py", "networking.py", "failures.py",
+            "prepare_repository.py", "dhcp_fixture.py",
+        ):
+            with self.subTest(file=name):
+                path = ROOT / "test/server" / name
+                code = path.read_text()
+                tree = ast.parse(code, filename=str(path))
+                self.assertFalse(
+                    [node.lineno for node in ast.walk(tree) if isinstance(node, ast.Assert)],
+                    f"Acceptance checks in {name} must use explicit failures, not assert",
+                )
+                compile(code, str(path), "exec", optimize=2)
 
 
 if __name__ == "__main__":

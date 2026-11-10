@@ -62,14 +62,16 @@ def http(address, port):
     host = f"[{address}]" if ":" in address else address
     with opener.open(f"http://{host}:{port}/network-proof", timeout=10) as reply:
         body = json.load(reply)
-    assert body == {"proof": "omarchy-disposable-network"}, body
+    if not (body == {"proof": "omarchy-disposable-network"}):
+        raise AssertionError(body)
     return body
 
 
 def dns(expected):
     command("resolvectl", "flush-caches")
     text = command("resolvectl", "query", "--protocol=dns", "--type=A", "github.com")
-    assert f"link: {expected}" in text, text
+    if not (f"link: {expected}" in text):
+        raise AssertionError(text)
     return text
 
 
@@ -106,23 +108,35 @@ def baseline(args):
         )
 
     links = eventually(ready)
-    assert all(i["NetworkFile"].endswith("20-omarchy-server.network") for i in links)
+    if not (all(i["NetworkFile"].endswith("20-omarchy-server.network") for i in links)):
+        raise AssertionError
     config = command("sshd", "-T").lower()
-    assert "passwordauthentication no" in config
-    assert "kbdinteractiveauthentication no" in config
-    assert "permitrootlogin no" in config
+    if not ("passwordauthentication no" in config):
+        raise AssertionError
+    if not ("kbdinteractiveauthentication no" in config):
+        raise AssertionError
+    if not ("permitrootlogin no" in config):
+        raise AssertionError
     listeners = command("ss", "-H", "-lntup")
     # Only SSH is deliberately exposed. Resolved must not bind 5353/5355.
-    assert "0.0.0.0:22" in listeners and "[::]:22" in listeners, listeners
-    assert not any(f":{port} " in listeners for port in (5353, 5355)), listeners
-    assert "Global: no" in command("resolvectl", "llmnr")
-    assert "Global: no" in command("resolvectl", "mdns")
+    if not ("0.0.0.0:22" in listeners and "[::]:22" in listeners):
+        raise AssertionError(listeners)
+    if not (not any(f":{port} " in listeners for port in (5353, 5355))):
+        raise AssertionError(listeners)
+    if not ("Global: no" in command("resolvectl", "llmnr")):
+        raise AssertionError
+    if not ("Global: no" in command("resolvectl", "mdns")):
+        raise AssertionError
     command("systemctl", "is-enabled", "nftables")
     rules = command("nft", "list", "table", "inet", "omarchy_server_filter")
-    assert "policy drop" in rules and "tcp dport 22 accept" in rules
-    assert "udp sport 67 udp dport 68 accept" in rules
-    assert "udp sport 547 udp dport 546 accept" in rules
-    assert "icmpv6 type" in rules
+    if not ("policy drop" in rules and "tcp dport 22 accept" in rules):
+        raise AssertionError
+    if not ("udp sport 67 udp dport 68 accept" in rules):
+        raise AssertionError
+    if not ("udp sport 547 udp dport 546 accept" in rules):
+        raise AssertionError
+    if not ("icmpv6 type" in rules):
+        raise AssertionError
     record(
         "baseline",
         {
@@ -213,7 +227,8 @@ def renew(args):
         return lease if lease.get("LeaseTimestampUSec", 0) > before else None
 
     after = eventually(renewed)
-    assert after["Message"]["yiaddr"] == ipaddress.IPv4Address("10.0.4.15").packed.hex()
+    if not (after["Message"]["yiaddr"] == ipaddress.IPv4Address("10.0.4.15").packed.hex()):
+        raise AssertionError
     record(
         "renew",
         {
@@ -288,7 +303,8 @@ def external(args):
     )
     provenance = json.loads((dest / "repository.json").read_text())
     fingerprint = "7C5C6FEB40A5B493007FAA3650B1EB533F640140"
-    assert provenance["maintainer_fingerprint"] == fingerprint
+    if not (provenance["maintainer_fingerprint"] == fingerprint):
+        raise AssertionError
     for signature, signed in (
         ("repository.json.sig", "repository.json"),
         ("omarchy-server.db.sig", "omarchy-server.db"),
@@ -303,15 +319,19 @@ def external(args):
             str(dest / signature),
             str(dest / signed),
         )
-        assert any(
+        if not (
+            any(
             line.startswith("[GNUPG:] VALIDSIG ") and line.split()[-1] == fingerprint
             for line in status.splitlines()
-        ), status
+        )
+        ):
+            raise AssertionError(status)
     for name in ("omarchy-server.db", "omarchy-server.db.sig"):
-        assert (
+        if not (
             hashlib.sha256((dest / name).read_bytes()).hexdigest()
             == provenance["files"][name]
-        )
+        ):
+            raise AssertionError
     record(
         "external",
         {
@@ -373,22 +393,28 @@ def static_check(args):
             dns="10.0.3.3",
         )
     )
-    assert (
+    if not (
         Path("/etc/systemd/network/11-network-acceptance-data.network").read_text()
         == expected
-    )
+    ):
+        raise AssertionError
 
     def ready():
         link = interface(DATA_MAC)
-        assert any(
+        if not (
+            any(
             a.get("AddressString") == "10.0.3.40" and a.get("ConfigSource") == "static"
             for a in link.get("Addresses", [])
         )
-        assert not link.get("DHCPv4Client", {}).get("Lease")
+        ):
+            raise AssertionError
+        if not (not link.get("DHCPv4Client", {}).get("Lease")):
+            raise AssertionError
         return link
 
     link = eventually(ready)
-    assert route4() == link["Name"]
+    if not (route4() == link["Name"]):
+        raise AssertionError
     record(
         "static-check",
         {
@@ -447,17 +473,21 @@ def ipv6_only(args):
         digest = hashlib.sha256(
             Path("/etc/systemd/network/11-network-acceptance-data.network").read_bytes()
         ).hexdigest()
-        assert digest == prior["configuration_sha256"]
+        if not (digest == prior["configuration_sha256"]):
+            raise AssertionError
         routes = json.loads(command("ip", "-j", "-6", "route", "show", "default"))
-        assert any(r["dev"] == data for r in routes), routes
+        if not (any(r["dev"] == data for r in routes)):
+            raise AssertionError(routes)
         command("resolvectl", "flush-caches")
         text = command(
             "resolvectl", "query", "--protocol=dns", "--type=AAAA", "one.one.one.one"
         )
-        assert f"link: {data}" in text, text
+        if not (f"link: {data}" in text):
+            raise AssertionError(text)
         with socket.create_connection(("fd00:3::15", 22), timeout=5) as connection:
             banner = connection.recv(100).decode().strip()
-        assert banner.startswith("SSH-2.0-"), banner
+        if not (banner.startswith("SSH-2.0-")):
+            raise AssertionError(banner)
         record(
             "ipv6-only",
             {

@@ -14,7 +14,8 @@ DB = Path("/var/lib/server-acceptance/database.sqlite3")
 def state(path=DB):
     uri = "file:" + str(path) + "?mode=ro" + ("&immutable=1" if path != DB else "")
     with closing(sqlite3.connect(uri, uri=True)) as db:
-        assert db.execute("pragma quick_check").fetchone()[0] == "ok"
+        if not (db.execute("pragma quick_check").fetchone()[0] == "ok"):
+            raise AssertionError
         rows = db.execute(
             "select token, payload from records order by token"
         ).fetchall()

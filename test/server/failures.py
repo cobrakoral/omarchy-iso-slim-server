@@ -261,7 +261,8 @@ def main():
                     + str(version)
                 )
                 number = latest_snapshot(vm)
-                assert number != before, "Missing pre-transaction snapshot"
+                if not (number != before):
+                    raise AssertionError("Missing pre-transaction snapshot")
                 vm.sudo(
                     'test "$(cat /.snapshots/'
                     + number
@@ -318,9 +319,8 @@ test "$(df -B1 --output=avail /boot | tail -n1)" -lt 134217728
 """)
                     filler = "/boot/fault-space-reservation"
                 text = attempt(vm, 1, "Insufficient free space")
-                assert (
-                    latest_snapshot(vm) == before
-                ), "Low-space refusal created a snapshot"
+                if not (latest_snapshot(vm) == before):
+                    raise AssertionError("Low-space refusal created a snapshot")
                 vm.sudo(
                     'test "$(cat /usr/share/omarchy-server-fault-fixture/version)" = 1; rm '
                     + filler
@@ -373,7 +373,8 @@ test "$(df -B1 --output=avail /boot | tail -n1)" -lt 134217728
                     "sed -i 's#file:///run/fault-packages/stable/#http://127.0.0.1:18080/stable/#' /etc/pacman.conf"
                 )
                 text = attempt(vm, 1, "Update failed during pacman")
-                assert server.aborted > 0, "Package download was not interrupted"
+                if not (server.aborted > 0):
+                    raise AssertionError("Package download was not interrupted")
                 vm.sudo(
                     'test "$(cat /usr/share/omarchy-server-fault-fixture/version)" = 1'
                 )
@@ -381,9 +382,8 @@ test "$(df -B1 --output=avail /boot | tail -n1)" -lt 134217728
             elif case == "stale-lock":
                 vm.sudo("expect_failure pgrep -x pacman; touch /var/lib/pacman/db.lck")
                 text = attempt(vm, 1, "Pacman database is locked")
-                assert (
-                    latest_snapshot(vm) == before
-                ), "Locked transaction created a snapshot"
+                if not (latest_snapshot(vm) == before):
+                    raise AssertionError("Locked transaction created a snapshot")
                 vm.sudo(
                     'test "$(cat /usr/share/omarchy-server-fault-fixture/version)" = 1; expect_failure pgrep -x pacman; rm /var/lib/pacman/db.lck'
                 )
@@ -444,7 +444,8 @@ mount -t 9p -o trans=virtio,version=9p2000.L,ro packages /run/fault-packages
             (directory / "failure-observed.txt").write_text(text)
             repaired = attempt(vm, 0, "Update complete")
             if case == "power-cut":
-                assert "Previous update did not complete:" in repaired
+                if not ("Previous update did not complete:" in repaired):
+                    raise AssertionError
             vm.sudo("""
 test "$(cat /usr/share/omarchy-server-fault-fixture/version)" = 2
 test ! -e /var/lib/omarchy-server/update-state

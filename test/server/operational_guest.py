@@ -263,7 +263,8 @@ def soak(args):
                 try:
                     result = request(path, obj)
                     if obj:
-                        assert result["token"] == token
+                        if not (result["token"] == token):
+                            raise AssertionError
                     with lock:
                         latencies.append(time.monotonic() - began)
                         if obj:
@@ -290,7 +291,8 @@ def soak(args):
                 run("systemctl", "kill", "--kill-whom=main", "--signal=SIGKILL", UNIT)
                 killed = True
                 ready()
-                assert pid() != old
+                if not (pid() != old):
+                    raise AssertionError
                 recovered = time.monotonic() - now
             if now >= next_sample:
                 samples.append(process())
@@ -300,9 +302,12 @@ def soak(args):
             future.result()
     after = process()
     actual = state()
-    assert actual["records"] == len(set(acknowledged)) == len(acknowledged)
-    assert killed and recovered is not None
-    assert max(x["fds"] for x in samples) <= before["fds"] + 16
+    if not (actual["records"] == len(set(acknowledged)) == len(acknowledged)):
+        raise AssertionError
+    if not (killed and recovered is not None):
+        raise AssertionError
+    if not (max(x["fds"] for x in samples) <= before["fds"] + 16):
+        raise AssertionError
     ordered = sorted(latencies)
     return {
         "elapsed_seconds": time.monotonic() - start,
@@ -350,13 +355,17 @@ def backup(args):
     thread = threading.Thread(target=writer)
     thread.start()
     try:
-        assert started.wait(10)
+        if not (started.wait(10)):
+            raise AssertionError
         static = ["/" + item for item in SCOPES if item != "var/lib/server-acceptance"]
         static.append("/var/lib/server-acceptance/documents")
         run("cp", "-a", "--parents", *static, str(staging))
-        assert manifest(Path("/"), skip_database=True) == manifest(
+        if not (
+            manifest(Path("/"), skip_database=True) == manifest(
             staging, skip_database=True
-        ), "Static source metadata did not survive backup copy"
+        )
+        ):
+            raise AssertionError("Static source metadata did not survive backup copy")
         for p in (staging / "var/lib/server-acceptance").glob("database.sqlite3*"):
             p.unlink()
         destination = staging / str(DB).lstrip("/")
@@ -371,7 +380,8 @@ def backup(args):
     finally:
         stop.set()
         thread.join(timeout=10)
-    assert writes and not thread.is_alive() and not writer_errors, writer_errors
+    if not (writes and not thread.is_alive() and not writer_errors):
+        raise AssertionError(writer_errors)
     metadata = {
         "format": 1,
         "scope": list(SCOPES),
@@ -448,8 +458,10 @@ def snapshot(args):
 def boundaries(args):
     ready()
     values = {k: Path(p).read_text().strip() for k, p in BOUNDARIES.items()}
-    assert values["root"] == "before-snapshot"
-    assert all(values[k] == "after-snapshot" for k in ("home", "log", "cache"))
+    if not (values["root"] == "before-snapshot"):
+        raise AssertionError
+    if not (all(values[k] == "after-snapshot" for k in ("home", "log", "cache"))):
+        raise AssertionError
     return {"boundaries": values, "database": state(), "healthy": request("/health")}
 
 
@@ -481,13 +493,15 @@ def restore(args):
     metadata = json.loads((staging / "MANIFEST.json").read_text())
     if metadata["format"] != 1 or metadata["scope"] != list(SCOPES):
         raise ValueError("Unknown backup contract")
-    assert (
-        manifest(staging) == metadata["files"]
-    ), "Staged file contents/ownership/modes/ACL/xattrs/links differ"
-    assert state(staging / str(DB).lstrip("/")) == metadata["database"]
+    if not (manifest(staging) == metadata["files"]):
+        raise AssertionError("Staged file contents/ownership/modes/ACL/xattrs/links differ")
+    if not (state(staging / str(DB).lstrip("/")) == metadata["database"]):
+        raise AssertionError
     account = metadata["service_account"]
-    assert account["name"] == USER
-    assert pwd.getpwnam("admin").pw_uid == metadata["admin_uid"]
+    if not (account["name"] == USER):
+        raise AssertionError
+    if not (pwd.getpwnam("admin").pw_uid == metadata["admin_uid"]):
+        raise AssertionError
     for ident, lookup in [
         (account["uid"], pwd.getpwuid),
         (account["gid"], grp.getgrgid),
@@ -516,12 +530,14 @@ def restore(args):
         dest = Path("/") / scope
         dest.parent.mkdir(parents=True, exist_ok=True)
         run("cp", "-a", "--", str(staging / scope), str(dest))
-    assert manifest(Path("/")) == metadata["files"], "Restored metadata differs"
+    if not (manifest(Path("/")) == metadata["files"]):
+        raise AssertionError("Restored metadata differs")
     run("systemctl", "daemon-reload")
     run("systemctl", "enable", "--now", UNIT)
     ready()
     actual = request("/state")
-    assert actual == metadata["database"]
+    if not (actual == metadata["database"]):
+        raise AssertionError
     shutil.rmtree(staging)
     return {
         "database": actual,
