@@ -976,3 +976,63 @@ existing server regressions and Python/Bash syntax checks were rerun locally.
 Proxmox/physical-hardware boot was performed for this change. Published `test3`
 remains unchanged and therefore does not contain this firewall until a future
 explicitly authorized ISO build and qualification.
+
+## Fully qualified signed test4 ISO: 2026-11-09 source / 2026-11-10 verification
+
+The prior section documents **pre-release** source-only network-hardening work.
+It has now shipped in the unofficial `slim-server-2026.11.09-test4` ISO. The
+historical test3 artifacts remain unchanged and are superseded for new tests.
+
+- Qualified source commit: **`680c5816a824f6369391de1a49d0b4027b314345`**
+  (GPG-signed, clean Git worktree, pushed to `feature/slim-server`).
+- Signed annotated Git release tag:
+  **`slim-server-2026.11.09-test4`**, peeling to the exact qualified source.
+- Public release:
+  `https://github.com/cobrakoral/omarchy-iso-slim-server/releases/tag/slim-server-2026.11.09-test4`.
+- Qualified output: `release/server-qualified-20261109-233013`.
+- Private evidence: `.server-work/release-20261109-233013` and final resumed
+  transcript `.server-work/qualify-resume-20261110-0026.log`.
+- ISO: `omarchy-slim-server-unofficial-2026.11.09-x86_64.iso`, **1,255,964,672
+  bytes**; SHA-256
+  `525f330d3e632b2980e873a68b7290a05b1f30bf6e73703bc42b12deadd3e0ad`.
+- Channel runtime: `omarchy-server 0.2.0-3`,
+  `omarchy-server-keyring 20261031-1`,
+  `limine-snapper-sync-server 1.32.1-3`; channel signatures verified.
+- New-cache build and pinned upstream test suite: **388 tests, 3 skipped**;
+  seven server regression suites: **175 tests, all passed**.
+- New disposable installed guest cases: default UEFI **176 packages**,
+  cloud-init UEFI **203**, legacy BIOS **176**, and encrypted UEFI/LUKS **176**.
+  All four installation receipts passed, the disks were compacted, and every
+  resulting disk SHA-256 was independently recomputed against its recorded
+  compaction evidence. These guests verified live/installed firewall policy,
+  per-link/global LLMNR/mDNS suppression, login and snapshot boot entries.
+- Interactive Gum installation plus console/password SSH, ACPI live/installed
+  shutdown and negative control, signed-update snapshot retention/reboot,
+  installed repository trust for both base and cloud-init, and actual snapshot
+  boot restoration with verified healthy reboot all **passed**.
+- The qualifier ran in two verified phases: the original round paused on a
+  transient SSH timeout during cloud-init repository trust. The resumed run
+  independently verified source, test and package provenance, ISO checksum,
+  four installation receipts and compacted disks, then produced fresh passing
+  operational receipts. The aggregated signed acceptance JSON correctly
+  records `passed: true` and `resumed: true`; final exit code **0** with
+  `SERVER_FRESH_RELEASE_ACCEPTANCE_PASS`.
+- The earlier intermittent Snapper empty-list diagnostic was corrected in
+  the acceptance harness to create snapshots using the **production D-Bus
+  interface**, with bounded retry only for the recognized transient error and
+  mandatory proof of the correct generated Limine boot entry. The qualifying
+  source is GPG-signed. No failing intermediate ISO was published.
+- Seven public release assets were uploaded and verified: ISO, ISO signature,
+  `SHA256SUMS`, manifest signature, public signing key, acceptance JSON, and
+  acceptance signature. Re-downloaded public manifest/JSON signatures verified
+  using the independently imported key fingerprint
+  `7C5C6FEB40A5B493007FAA3650B1EB533F640140`; public ISO URL returned
+  HTTP 200 and the manifest matched the accepted ISO digest.
+
+This **documentation-only** checkpoint follows the release and is **not** part
+of its qualified source commit. This is an unofficial test build; real physical
+hardware, Secure Boot, Proxmox VE and publicly routed IPv6 remain unverified.
+The installer can erase the entire selected disk; install only on disposable
+media with the target device verified. SSH/TCP 22 is permitted by default from
+reachable networks, so Internet-facing users should restrict management
+access further.

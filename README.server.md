@@ -36,7 +36,7 @@ OMARCHY_EDITION=server bin/omarchy-iso-make --empty-cache --no-boot-offer
 ```
 
 The currently published `server-packages` channel provides the signed
-`omarchy-server 0.2.0-3` runtime used by the qualified 2026.11.08 `test3` ISO.
+`omarchy-server 0.2.0-3` runtime used by the qualified 2026.11.09 `test4` ISO.
 Older versioned package archives are retained for historical installations;
 Pacman resolves the current version from the signed repository database.
 A normal source build **does not require a private signing key** when using
@@ -168,11 +168,13 @@ digest also does not freeze later package downloads.
 
 ## Current release and signed updates
 
-The latest qualified and published 2026.11.08 `test3` ISO includes the
-fail-closed disk-signature cleanup, installer preflight and update recovery,
-live-only credential cleanup after successful installation, and an explicit
-virtual power-button policy. Its release tests remain active under optimized
-Python. It uses signed
+The latest qualified and published 2026.11.09 `test4` ISO includes the
+fail-closed disk-signature cleanup, secure firewall defaults for both IPv4 and
+IPv6, LLMNR/mDNS suppression, explicitly confirmed weak-password handling,
+installer preflight and update recovery, live-only credential cleanup after
+successful installation, and virtual power-button handling. It uses the real
+Snapper D-Bus path in release acceptance and verifies Limine snapshot entries.
+The earlier optimized-Python test hardening remains in place. It uses signed
 **omarchy-server 0.2.0-3**, **omarchy-server-keyring 20261031-1**, and
 **limine-snapper-sync-server 1.32.1-3** packages.
 The snapshot core still comes from the pinned official 1.32.1-2 archive;
@@ -438,9 +440,9 @@ router advertisements remain enabled. No second DHCP daemon is enabled.
 
 ### Default server firewall and multicast-name resolution
 
-**Source change only until a new ISO is explicitly built.** The published
-`slim-server-2026.11.08-test3` ISO is unchanged and does not yet include this
-firewall hardening. Do not assume it has these defaults.
+**These protections are included in the qualified and published
+`slim-server-2026.11.09-test4` ISO.** The historical `test3` ISO remains
+unchanged and does **not** include this firewall hardening.
 
 New builds explicitly install `nftables` in both the live ISO and server root
 package closures. Their default ruleset is loaded by `nftables.service` before
@@ -478,8 +480,9 @@ necessary port, validate with `sudo nft -c -f /etc/nftables.conf`, and reload
 from a console or an independent management connection to avoid losing SSH.
 Do not replace a running host firewall using the ISO's rules during testing.
 
-Local tests, without rebuilding the ISO or touching the OmarchyVM firewall:
-`python3 test/server/unit.py` and `test/server/firewall_namespace.sh`. The
+Network security can also be tested without rebuilding the ISO or touching
+the OmarchyVM firewall: `python3 test/server/unit.py` and
+`test/server/firewall_namespace.sh`. The
 latter creates disposable namespaces, checks IPv4+IPv6 SSH/ping/DHCP and
 rejects incoming TCP 8080 on both families. No Proxmox test is implied.
 
