@@ -183,7 +183,9 @@ jobs:
             mkdir -p "$dir"
             cp ../evidence/*.png "$dir/"
             git add "$dir"
-            git commit -q -m "Upgrade test $GITHUB_RUN_ID, attempt $GITHUB_RUN_ATTEMPT: $FROM to $TO"
+            if ! git diff --cached --quiet; then
+              git commit -q -m "Upgrade test $GITHUB_RUN_ID, attempt $GITHUB_RUN_ATTEMPT: $FROM to $TO"
+            fi
             if git push -q "$url" "HEAD:refs/heads/$SHOTS_BRANCH"; then break; fi
             [ "$attempt" -lt 5 ] || { echo "::error::could not push the pictures after 5 tries"; exit 1; }
             echo "The push lost a race, trying again"
