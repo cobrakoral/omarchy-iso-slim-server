@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import os
 import shutil
+import tempfile
 import subprocess
 from qemu import VM, ROOT, run, working_copy
 
@@ -30,22 +31,31 @@ def fixture_signing_key(fingerprint):
         raise ValueError("git user.signingkey is not configured")
     if key != fingerprint:
         raise ValueError("Fixture signer must match the installed maintainer trust anchor")
-    try:
-        subprocess.run(
-            ["gpg", "--batch", "--local-user", fingerprint, "--detach-sign", "--output", "-"],
-            input=b"omarchy-server-signing-preflight\n",
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            check=True,
-        )
-    except subprocess.CalledProcessError as error:
-        detail = error.stderr.decode("utf-8", errors="replace").strip()
-        message = f"Failed to sign test payload with maintainer key {fingerprint}"
-        if detail:
-            message += f": {detail}"
-        raise RuntimeError(message) from error
-    except FileNotFoundError as error:
-        raise RuntimeError("gpg is not installed or not in PATH") from error
+    # The guest must trust the exact signing subkey that GPG selects now.
+    # Otherwise the signed-update acceptance fails only after building the ISO.
+    with tempfile.TemporaryDirectory(prefix="server-signer-preflight-") as name:
+        home = Path(name)
+        payload, signature = home / "payload", home / "payload.sig"
+        payload.write_bytes(b"omarchy-server-signing-preflight\n")
+        try:
+            for command in (
+                ["gpg", "--batch", "--local-user", fingerprint, "--detach-sign",
+                 "--output", str(signature), str(payload)],
+                ["gpg", "--batch", "--homedir", str(home), "--import",
+                 str(ROOT / "builder/server/keyring/omarchy-server.gpg")],
+                ["gpg", "--batch", "--homedir", str(home), "--verify",
+                 str(signature), str(payload)],
+            ):
+                subprocess.run(command, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.PIPE, check=True)
+        except subprocess.CalledProcessError as error:
+            detail = error.stderr.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(
+                "Maintainer signing key is incompatible with the shipped "
+                "server keyring: " + detail
+            ) from error
+        except FileNotFoundError as error:
+            raise RuntimeError("gpg is not installed or not in PATH") from error
     return key
 
 

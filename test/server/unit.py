@@ -28,6 +28,21 @@ packages = load("packages", "builder/server/check-packages.py")
 
 
 class ServerTests(unittest.TestCase):
+    def test_server_keyring_binary_and_armored_exports_match(self):
+        fingerprints = []
+        for name in ("omarchy-server.gpg", "omarchy-server.asc"):
+            text = subprocess.check_output(
+                ["gpg", "--batch", "--with-colons", "--show-keys",
+                 str(ROOT / "builder/server/keyring" / name)], text=True
+            )
+            fingerprints.append([
+                line.split(":")[9] for line in text.splitlines()
+                if line.startswith("fpr:")
+            ])
+        self.assertEqual(fingerprints[0], fingerprints[1])
+        self.assertEqual(fingerprints[0][0],
+                         "7C5C6FEB40A5B493007FAA3650B1EB533F640140")
+
     def test_cloud_config_survives_chroot_api_mounts(self):
         # arch-chroot binds /run from the live system. The temporary pacman
         # config must live on the target's persistent tree during its call.
